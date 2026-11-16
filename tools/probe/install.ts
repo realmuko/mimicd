@@ -65,6 +65,10 @@ async function findContinue(): Promise<{ x: number; y: number } | null> {
 }
 
 console.log(`推送 ${apk}`);
+
+// 先卸载：否则 pm install -r 会因为「旧版已安装」提前判定成功，实际没换成新版
+await adb(["shell", `pm uninstall ${pkg}`]).catch(() => "");
+await sleep(1000);
 await adb(["push", apk, "/data/local/tmp/mimic-probe.apk"]);
 
 console.log("开始在设备上安装（后台），自动处理华为确认框…");

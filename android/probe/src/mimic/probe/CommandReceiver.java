@@ -28,6 +28,9 @@ public class CommandReceiver extends BroadcastReceiver {
         } catch (Throwable t) {
             result = "ERR " + t;
         }
+        // 把结果放进广播结果，am broadcast 会直接打印出来，不需要再读 logcat/文件
+        setResultCode(0);
+        setResultData(result);
         Log.i(TAG, action + " => " + result);
         write(ctx, "{\"action\":\"" + action + "\",\"result\":" + jsonString(result) + "}");
     }
