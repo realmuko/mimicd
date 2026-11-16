@@ -76,7 +76,17 @@ const registry = SkillRegistry.loadDir(skillsDir);
 if (registry.issues.length > 0) {
   console.error("技能有问题：\n" + registry.issues.join("\n"));
 }
-const { skill, params: resolved } = registry.resolve(skillId, params());
+// 命令行参数都是字符串：按技能声明的类型转一下，否则 integer 参数会被拒
+const preview = registry.get(skillId);
+const rawParams = params();
+const coerced: Record<string, unknown> = {};
+for (const [k, v] of Object.entries(rawParams)) {
+  const spec = preview?.params?.[k];
+  if (spec?.type === "integer") coerced[k] = Number(v);
+  else if (spec?.type === "boolean") coerced[k] = v === "true";
+  else coerced[k] = v;
+}
+const { skill, params: resolved } = registry.resolve(skillId, coerced);
 
 // 先看一眼现在在哪一页，写进事件流，出问题时好对照
 const before = decodeFrame(await adb.screencap());

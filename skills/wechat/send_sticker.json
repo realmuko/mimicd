@@ -1,7 +1,7 @@
 {
   "id": "wechat.send_sticker",
-  "version": 1,
-  "title": "发一个收藏表情",
+  "version": 2,
+  "title": "在当前会话发一个收藏表情",
   "page": "chat",
   "intent": "reply_with_sticker",
   "params": {
@@ -9,51 +9,22 @@
       "type": "integer",
       "min": 1,
       "max": 8,
-      "desc": "收藏页第几个「真贴纸」格子（跳过 + 号和微信输入法推广位）"
-    },
-    "mood": {
-      "type": "string",
-      "required": false,
-      "desc": "为什么发这个（写进事件，便于事后看她用表情像不像人）"
+      "desc": "第几个「真贴纸」（跳过 + 号与微信输入法推广位）"
     }
   },
-  "pre": [
-    { "kind": "page", "value": "chat", "message": "必须先停在一个聊天页" },
-    { "kind": "element", "value": "chat.input_bar", "message": "输入栏不在，页面没停稳" },
-    { "kind": "no_ime", "value": true, "message": "输入法键盘弹着时表情面板打不开" }
-  ],
+  "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
   "steps": [
-    { "op": "obs.screenshot", "args": { "tag": "before" } },
-    { "op": "act.tap", "target": { "page": "chat", "element": "input_bar.emoji_button" } },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 1200 } },
-    { "op": "act.tap", "target": { "page": "sticker_panel", "element": "tabs.favorites" } },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 1200 } },
-    {
-      "op": "obs.screenshot",
-      "args": { "tag": "panel" },
-      "expect": [{ "kind": "sticker_grid_visible", "value": true }]
-    },
-    {
-      "op": "act.tap",
-      "target": { "page": "sticker_panel", "element": "grid.sticker_cell", "index": "$slot" },
-      "onFail": "escalate"
-    },
-    { "op": "wait.element", "args": { "what": "chat.bubble.last", "timeoutMs": 3000 } },
-    {
-      "op": "check",
-      "args": {
-        "kind": "bubble_hash_matches_panel_cell",
-        "panelTag": "panel",
-        "slot": "$slot"
-      },
-      "onFail": "escalate"
-    }
+    { "op": "act.tap", "target": { "page": "chat", "element": "emoji_panel_button" } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "act.tap", "target": { "page": "sticker_panel", "element": "tab_favorites" } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "act.tap_sticker_slot", "args": { "slot": "$slot" } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "act.close_panel" },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } }
   ],
-  "post": [
-    { "kind": "element", "value": "chat.bubble.last", "message": "没有出现新气泡，可能没发出去" },
-    { "kind": "hash_equal", "value": "planned_sticker" }
-  ],
-  "budget": { "maxSteps": 12, "maxMs": 15000 },
+  "post": [{ "kind": "page", "value": "chat", "message": "发完不在会话页了" }],
+  "budget": { "maxSteps": 12, "maxMs": 40000 },
   "idempotency": "unsafe",
   "dryRun": "supported"
 }

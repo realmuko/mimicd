@@ -19,6 +19,8 @@ export const OPS = [
   "act.paste",
   "act.scroll",
   "act.back",
+  "act.close_panel",
+  "act.tap_sticker_slot",
   // 观察（会产出事件/工件）
   "obs.screenshot",
   "obs.ocr",

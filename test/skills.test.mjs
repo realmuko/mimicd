@@ -75,10 +75,11 @@ test("参数校验给人话，不是错误码", () => {
 test("$参数占位会被填进步骤，且不改动技能本体", () => {
   const reg = workspaceSkills();
   const { skill, params } = reg.resolve("wechat.send_sticker", { slot: 3 });
+  const idx = skill.steps.findIndex((s) => s.args && s.args.slot === "$slot");
+  assert.ok(idx >= 0, "技能里应有 $slot 占位");
   const steps = bindSteps(skill, params);
-  const tap = steps.find((s, i) => i === 6);
-  assert.equal(tap.target.index, 3);
-  assert.equal(skill.steps[6].target.index, "$slot", "原技能必须保持只读");
+  assert.equal(steps[idx].args.slot, 3);
+  assert.equal(skill.steps[idx].args.slot, "$slot", "原技能必须保持只读");
 });
 
 test("重复 id 的第二个文件被跳过，而不是静默覆盖", () => {

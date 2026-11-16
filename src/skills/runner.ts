@@ -15,6 +15,8 @@ import { decode, type Rect } from "../image/image.ts";
 import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
 import { findDarkPanel } from "../perception/panel.ts";
+import { findStickerCells, type PanelGrid } from "../perception/cells.ts";
+import { looksLikeInputBar } from "../perception/page.ts";
 import { bindSteps } from "./registry.ts";
 import type { Assertion, Skill, Step } from "./types.ts";
 
@@ -177,6 +179,32 @@ export class SkillRunner {
         const text = String(args["text"] ?? "");
         if (!text) throw new SkillRunError("act.type 少了 text");
         return this.#deps.actuator.typeText(text);
+      }
+
+      case "act.tap_sticker_slot": {
+        const shot = await this.#deps.device.adb.screencap();
+        const bmp = decode(shot.png);
+        const scan = (this.#deps.graph.pages["sticker_panel"]?.grid as { scan?: unknown } | undefined)?.scan as
+          | import("../perception/cells.ts").PanelGrid
+          | undefined;
+        if (!scan) throw new SkillRunError("页面图里没有 sticker_panel.grid.scan");
+        const cells = findStickerCells(bmp, scan);
+        if (cells.length === 0) throw new SkillRunError("面板里没认出贴纸（可能不在收藏页）");
+        const want = Number(args["slot"] ?? 1);
+        const index = Math.min(cells.length, Math.max(1, Number.isFinite(want) ? Math.round(want) : 1));
+        const cell = cells[index - 1]!;
+        const cx = cell.rect.x + cell.rect.w / 2;
+        const cy = cell.rect.y + cell.rect.h / 2;
+        await this.#deps.actuator.tapPoint(cx, cy, 60);
+        return { slot: index, total: cells.length, fill: cell.fill, at: { x: Math.round(cx), y: Math.round(cy) } };
+      }
+
+      case "act.close_panel": {
+        const shot = await this.#deps.device.adb.screencap();
+        const bmp = decode(shot.png);
+        if (looksLikeInputBar(bmp)) return { closed: false };
+        await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+        return { closed: true };
       }
 
       case "act.back": {

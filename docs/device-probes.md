@@ -354,3 +354,18 @@ ADBKeyboard 的 [README](https://github.com/senzhk/ADBKeyBoard) 里只有 `ADB_I
 `wechat.read_screen` 实测（scale=4）：一次读完可见消息，包含
 `引擎冒烟测试 vl` —— 中文准，`v1` 里的数字 1 被读成小写 l。
 所以 OCR 的定位是**扫描/找**（有哪些消息、文章大意），要**逐字精确**时仍然走「长按→复制→读剪贴板」。
+
+## 25. 发表情：面板格子识别 + 技能跑通
+
+`node tools/run-skill.ts --skill wechat.send_sticker --param slot=1`
+
+| 项 | 结果 |
+|---|---|
+| 格子识别 | 收藏页认出 **2 张真贴纸**（fill 0.98 / 0.99），`+` 号与推广位被排除 |
+| 发送 | 点第 1 格后气泡出现（截图确认），面板自动关闭 |
+| 收尾 | `act.close_panel` 按「输入栏是否在底部」判断面板是否还开着，只在该关时才 back |
+
+两个修掉的问题：
+1. **tab 行的 y 偏了 24px**（配置 0.6295 vs 实测 0.619），点「收藏」点到了空处，结果在「表情」页里找了个 fill=0.347 的假格。
+2. **点完贴纸面板会自己关**，技能里无条件 `act.back` 就会把会话也退掉（第一次跑完手机停在搜索页）。
+   改成 `act.close_panel`：先截图看 `looksLikeInputBar`，只有输入栏不在底部时才发 back。
