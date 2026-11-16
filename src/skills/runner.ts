@@ -322,6 +322,11 @@ export class SkillRunner {
 
       case "check": {
         const kind = String(args["kind"] ?? "");
+        // dry-run 只出计划：需要读设备状态的检查跳过并记一笔，不能让它把计划判失败
+        if (this.#deps.actuator.dryRun && (kind === "input_contains" || kind === "clipboard_contains")) {
+          this.#deps.eventLog?.append("note", { check: kind, skipped: "dry-run" }, { src: "skills.runner" });
+          return { skipped: "dry-run", check: kind };
+        }
         if (kind === "input_contains") {
           const expect = String(args["value"] ?? "");
           const current = await this.#deps.actuator.readInput();
