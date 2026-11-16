@@ -10,7 +10,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "probe": "node tools/probe/probe.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
