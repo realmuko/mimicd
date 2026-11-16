@@ -24,6 +24,7 @@ export const OPS = [
   "obs.ocr",
   "obs.a11y",
   "obs.clipboard",
+  "obs.text_bubble",
   // 等待（等真实状态，不睡固定时间）
   "wait.element",
   "wait.stable",

@@ -1,0 +1,23 @@
+{
+  "id": "wechat.send_text",
+  "version": 1,
+  "title": "在当前会话发一条文本",
+  "page": "chat",
+  "intent": "reply",
+  "params": {
+    "text": { "type": "string", "desc": "要发的正文" }
+  },
+  "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
+  "steps": [
+    { "op": "act.tap", "target": { "page": "chat", "element": "input_box" } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "act.type", "args": { "text": "$text" } },
+    { "op": "check", "args": { "kind": "input_contains", "value": "$text" } },
+    { "op": "act.tap", "target": { "page": "chat", "element": "send_button" } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } }
+  ],
+  "post": [{ "kind": "page", "value": "chat", "message": "发完不在会话页了" }],
+  "budget": { "maxSteps": 10, "maxMs": 30000 },
+  "idempotency": "unsafe",
+  "dryRun": "supported"
+}

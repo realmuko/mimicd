@@ -44,6 +44,17 @@ public class ProbeIme extends InputMethodService {
                 + " inputType=" + (info == null ? 0 : info.inputType));
     }
 
+    /**
+     * 不显示任何键盘 UI。
+     *
+     * 必要性：一旦弹出键盘，微信的输入栏会被顶到屏幕中间，发送按钮的坐标全变；
+     * 我们只需要 InputConnection 来提交/读取文本，不需要给人用的键盘。
+     */
+    @Override
+    public boolean onEvaluateInputViewShown() {
+        return false;
+    }
+
     /** 输入框里光标前的文本 + 光标后的文本。 */
     public String readEditor() {
         InputConnection ic = getCurrentInputConnection();

@@ -20,6 +20,7 @@ test("仓库里的三个微信技能全部通过校验", () => {
     "wechat.read_link",
     "wechat.save_sticker",
     "wechat.send_sticker",
+    "wechat.send_text",
   ]);
   assert.equal(reg.byIntent("reply_with_sticker").length, 1);
 });

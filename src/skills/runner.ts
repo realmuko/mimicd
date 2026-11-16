@@ -1,0 +1,343 @@
+/**
+ * 技能执行器：把声明式技能跑成动作序列。
+ *
+ * 原则：
+ *  - 不认识的断言/操作**直接报错**，不静默通过（静默通过比失败更危险）；
+ *  - 每一步都受预算约束（步数 + 墙钟）；
+ *  - 只在有把握的地方做「验证」：读输入框、判页面；没有 OCR 就不假装能验 OCR；
+ *  - 失败要能说清「卡在第几步、为什么」。
+ */
+
+import type { EventLog } from "../eventlog.ts";
+import { Actuator } from "../act/actuator.ts";
+import type { DevicePorts } from "../device/types.ts";
+import { decode, type Rect } from "../image/image.ts";
+import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
+import { waitStable } from "../perception/stable.ts";
+import { findDarkPanel } from "../perception/panel.ts";
+import { bindSteps } from "./registry.ts";
+import type { Assertion, Skill, Step } from "./types.ts";
+
+export interface RunnerDeps {
+  device: DevicePorts;
+  actuator: Actuator;
+  graph: PageGraph;
+  eventLog?: EventLog;
+}
+
+export interface RunResult {
+  skillId: string;
+  ok: boolean;
+  steps: number;
+  ms: number;
+  /** pre / steps / post / budget */
+  failedAt?: "pre" | "steps" | "post" | "budget";
+  reason?: string;
+  outputs: Record<string, unknown>;
+}
+
+export class SkillRunError extends Error {
+  override name = "SkillRunError";
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class SkillRunner {
+  readonly #deps: RunnerDeps;
+
+  constructor(deps: RunnerDeps) {
+    this.#deps = deps;
+  }
+
+  async run(skill: Skill, params: Record<string, unknown> = {}): Promise<RunResult> {
+    const started = Date.now();
+    const outputs: Record<string, unknown> = {};
+    const steps = bindSteps(skill, params);
+
+    this.#deps.eventLog?.append(
+      "plan.planned",
+      { skill: skill.id, version: skill.version, params, steps: steps.length, dryRun: this.#deps.actuator.dryRun },
+      { src: "skills.runner" },
+    );
+
+    const finish = (ok: boolean, failedAt?: RunResult["failedAt"], reason?: string, stepIndex = 0): RunResult => {
+      const result: RunResult = {
+        skillId: skill.id,
+        ok,
+        steps: stepIndex,
+        ms: Date.now() - started,
+        outputs,
+      };
+      if (failedAt) result.failedAt = failedAt;
+      if (reason) result.reason = reason;
+      this.#deps.eventLog?.append(
+        ok ? "action.verified" : "note",
+        { skill: skill.id, ok, failedAt: failedAt ?? null, reason: reason ?? null, steps: stepIndex, ms: result.ms },
+        { src: "skills.runner" },
+      );
+      return result;
+    };
+
+    // ---- pre ----
+    for (const assertion of skill.pre) {
+      const check = await this.#assert(assertion);
+      if (!check.ok) return finish(false, "pre", `前置条件不满足：${check.message}`);
+    }
+
+    // ---- steps ----
+    let i = 0;
+    for (const step of steps) {
+      i++;
+      if (i > skill.budget.maxSteps) return finish(false, "budget", `步数超过预算 ${skill.budget.maxSteps}`, i - 1);
+      if (Date.now() - started > skill.budget.maxMs) {
+        return finish(false, "budget", `耗时超过预算 ${skill.budget.maxMs}ms`, i - 1);
+      }
+      try {
+        const detail = await this.#step(step, outputs);
+        if (detail) outputs[`step${i}`] = detail;
+      } catch (err) {
+        const message = (err as Error).message;
+        if (step.optional) {
+          this.#deps.eventLog?.append("note", { skill: skill.id, step: i, skipped: message }, { src: "skills.runner" });
+          continue;
+        }
+        if (step.onFail === "skip") continue;
+        return finish(false, "steps", `第 ${i} 步（${step.op}）失败：${message}`, i - 1);
+      }
+    }
+
+    // ---- post ----
+    for (const assertion of skill.post) {
+      const check = await this.#assert(assertion);
+      if (!check.ok) return finish(false, "post", `后置条件不满足：${check.message}`, i);
+    }
+
+    return finish(true, undefined, undefined, i);
+  }
+
+  // ---------------- 断言 ----------------
+
+  async #assert(assertion: Assertion): Promise<{ ok: boolean; message: string }> {
+    const label = typeof assertion.value === "string" ? assertion.value : JSON.stringify(assertion.value);
+    switch (assertion.kind) {
+      case "page": {
+        const guess = await this.#page();
+        return { ok: guess.page === assertion.value, message: `期望页面 ${label}，实际 ${guess.page}（${guess.reason}）` };
+      }
+      case "element": {
+        // 元素存在性在页面图里判：这页有没有这个元素
+        const [page, element] = String(assertion.value).split(".");
+        if (!page || !element) return { ok: false, message: `元素断言格式应为 page.element，收到 ${label}` };
+        try {
+          rectOf(this.#deps.graph, page, element, 1, 1);
+          return { ok: true, message: "ok" };
+        } catch (err) {
+          return { ok: false, message: (err as Error).message };
+        }
+      }
+      case "no_ime": {
+        const shown = await this.#imeShown();
+        return { ok: shown === false, message: `期望键盘收起，实际 ${shown ? "弹出" : "收起"}` };
+      }
+      default:
+        throw new SkillRunError(`这条断言还不会判：${assertion.kind}（不静默通过）`);
+    }
+  }
+
+  // ---------------- 步骤 ----------------
+
+  async #step(step: Step, outputs: Record<string, unknown>): Promise<unknown> {
+    const args = (step.args ?? {}) as Record<string, unknown>;
+    switch (step.op) {
+      case "obs.screenshot": {
+        const shot = await this.#deps.device.adb.screencap();
+        const guess = await this.#page();
+        this.#deps.eventLog?.append(
+          "frame.captured",
+          { tag: String(args["tag"] ?? "shot"), page: guess.page, bytes: shot.png.length, width: shot.width, height: shot.height },
+          { src: "skills.runner" },
+        );
+        return { page: guess.page, bytes: shot.png.length, ms: shot.ms };
+      }
+
+      case "act.tap": {
+        const rect = this.#rectOfTarget(step);
+        return this.#deps.actuator.tapRect(rect);
+      }
+
+      case "act.long_press": {
+        const rect = this.#rectOfTarget(step);
+        return this.#deps.actuator.holdRect(rect);
+      }
+
+      case "act.type": {
+        const text = String(args["text"] ?? "");
+        if (!text) throw new SkillRunError("act.type 少了 text");
+        return this.#deps.actuator.typeText(text);
+      }
+
+      case "act.back": {
+        await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+        return { back: true };
+      }
+
+      case "act.scroll": {
+        const region = this.#optionalRect(step, args["region"] as string | undefined, "chat.message_area");
+        const times = Number(args["times"] ?? 1);
+        const n = Number.isFinite(times) ? Math.max(0, Math.min(12, Math.round(times))) : 1;
+        for (let k = 0; k < n; k++) {
+          await this.#deps.actuator.swipe(
+            { x: region.x + region.w / 2, y: region.y + region.h * 0.85 },
+            { x: region.x + region.w / 2, y: region.y + region.h * 0.2 },
+          );
+        }
+        return { scrolled: n };
+      }
+
+      case "wait.stable": {
+        const frames = Number(args["frames"] ?? 2);
+        const timeoutMs = Number(args["timeoutMs"] ?? 2000);
+        const region = this.#staticRegion();
+        const result = await waitStable(this.#deps.device.adb, { frames, timeoutMs, region });
+        this.#deps.eventLog?.append(
+          "note",
+          { wait: "stable", ok: result.stable, ratio: round4(result.ratio), ms: result.ms, region: region ?? null },
+          { src: "skills.runner" },
+        );
+        if (!result.stable) throw new SkillRunError(`等稳定帧超时（${timeoutMs}ms，变化 ${round4(result.ratio)}）`);
+        return { stable: true, ms: result.ms, ratio: round4(result.ratio) };
+      }
+
+      case "wait.element": {
+        const what = String(args["what"] ?? "");
+        const timeoutMs = Number(args["timeoutMs"] ?? 3000);
+        const page = what.split(".")[0] as string;
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          const guess = await this.#page();
+          if (guess.page === page) return { appeared: page, ms: Date.now() - (deadline - timeoutMs) };
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        throw new SkillRunError(`等 ${what} 超时（${timeoutMs}ms），当前页面不是 ${page}`);
+      }
+
+      case "check": {
+        const kind = String(args["kind"] ?? "");
+        if (kind === "input_contains") {
+          const expect = String(args["value"] ?? "");
+          const current = await this.#deps.actuator.readInput();
+          const hay = `${current.before}${current.after}`;
+          if (!hay.includes(expect)) {
+            throw new SkillRunError(`输入框里没有「${expect}」，实际是「${truncate(hay)}」`);
+          }
+          this.#deps.eventLog?.append("action.verified", { check: kind, expect, ok: true }, { src: "skills.runner" });
+          return { inputContains: true };
+        }
+        if (kind === "clipboard_contains") {
+          const expect = String(args["value"] ?? "");
+          const text = await this.#deps.actuator.readClipboard();
+          if (!text.includes(expect)) throw new SkillRunError(`剪贴板里没有「${expect}」`);
+          return { clipboardContains: true };
+        }
+        throw new SkillRunError(`这条检查还不会做：${kind}（不静默通过）`);
+      }
+
+      case "record": {
+        this.#deps.eventLog?.append("note", { record: args }, { src: "skills.runner" });
+        outputs[String(args["kind"] ?? "record")] = args;
+        return { recorded: true };
+      }
+
+      case "obs.text_bubble": {
+        // 长按气泡 → 找深色菜单 → 点第一格（复制）→ 读剪贴板
+        const rect = this.#rectOfTarget(step);
+        await this.#deps.actuator.holdRect(rect);
+        await new Promise((r) => setTimeout(r, 600));
+        const shot = await this.#deps.device.adb.screencap();
+        const bmp = decode(shot.png);
+        const panel = findDarkPanel(bmp);
+        if (!panel) throw new SkillRunError("长按后没找到浮层菜单（可能没选中气泡）");
+        const copy = panel.cell(0, 0, 5, 2);
+        await this.#deps.actuator.tapPoint(copy.x, copy.y, 60);
+        await new Promise((r) => setTimeout(r, 300));
+        const text = await this.#deps.actuator.readClipboard();
+        this.#deps.eventLog?.append("note", { op: "text_bubble", chars: text.length }, { src: "skills.runner" });
+        return { text };
+      }
+
+      case "obs.clipboard": {
+        const text = await this.#deps.actuator.readClipboard();
+        return { clipboard: text };
+      }
+
+      case "branch":
+      case "obs.ocr":
+      case "obs.a11y":
+      case "act.paste":
+        throw new SkillRunError(`操作 ${step.op} 还没实现（不静默跳过）`);
+
+      default:
+        throw new SkillRunError(`未知操作 ${String(step.op)}`);
+    }
+  }
+
+  // ---------------- 小工具 ----------------
+
+  async #page() {
+    const frame = await this.#deps.device.adb.screencap();
+    const bmp = decode(frame.png);
+    const focus = await this.#deps.device.adb.focus();
+    return detectPage(bmp, focus);
+  }
+
+  async #imeShown(): Promise<boolean> {
+    const dump = await this.#deps.device.adb.shell("dumpsys input_method", 20000);
+    return /mInputShown=true/.test(dump);
+  }
+
+  #rectOfTarget(step: Step): Rect {
+    const raw = (step.args ?? {}) as Record<string, unknown>;
+    const given = raw["rect"] as Rect | undefined;
+    if (given && typeof given.x === "number") return given;
+    const target = step.target;
+    if (!target) throw new SkillRunError(`${step.op} 需要 target 或 args.rect`);
+    const screen = this.#deps.graph.device.screen;
+    return rectOf(this.#deps.graph, target.page, target.element, screen.w, screen.h);
+  }
+
+  #optionalRect(step: Step, regionName: string | undefined, fallback: string): Rect {
+    const screen = this.#deps.graph.device.screen;
+    if (regionName) {
+      const [page, element] = regionName.split(".");
+      if (page && element) return rectOf(this.#deps.graph, page, element, screen.w, screen.h);
+    }
+    if (step.target) return rectOf(this.#deps.graph, step.target.page, step.target.element, screen.w, screen.h);
+    const [page, element] = fallback.split(".");
+    return rectOf(this.#deps.graph, page!, element!, screen.w, screen.h);
+  }
+
+  /** 当前页面的静区（用于等稳定帧）；没有定义就返回 undefined（整帧，谨慎使用）。 */
+  #staticRegion(): Rect | undefined {
+    const screen = this.#deps.graph.device.screen;
+    // 聊天页的静区取标题栏 + 输入栏之外的上下两条带以外的位置没意义，
+    // 这里用「标题栏」——它不该动，动了说明页面在切。
+    const page = this.#deps.graph.pages["chat"];
+    const header = page?.elements?.["header"];
+    if (!header) return undefined;
+    return {
+      x: Math.round(header.x * screen.w),
+      y: Math.round(header.y * screen.h),
+      w: Math.round(header.w * screen.w),
+      h: Math.round(header.h * screen.h),
+    };
+  }
+}
+
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
+function truncate(s: string): string {
+  return s.length > 60 ? s.slice(0, 60) + "…" : s;
+}

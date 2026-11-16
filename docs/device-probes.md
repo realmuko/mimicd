@@ -303,3 +303,36 @@ ADBKeyboard 的 [README](https://github.com/senzhk/ADBKeyBoard) 里只有 `ADB_I
 4. APK 不改 `versionCode` 时，`pm install -r` 会「看起来成功、实际还是旧的」。
 5. EMUI 装 sideload 有**两次**确认框，「继续安装」的位置在两次里不同（y=2028 / y=1878），
    不能按固定坐标点 → 用 `uiautomator dump` 找 `text="继续安装"` 的 bounds。已封装进 `tools/probe/install.ts`。
+
+---
+
+# 第五轮：引擎端到端（2026-11-17 01:10–01:20）
+
+## 22. 技能执行器在真机上跑通
+
+`node tools/run-skill.ts --adb <adb> --skill wechat.send_text --param "text=引擎冒烟测试 v1"`
+
+| 项 | 结果 |
+|---|---|
+| 结果 | ok=true，6 步，8.2s |
+| 打字 | 中文经自建输入法 `commitText` 进入微信输入框，`readInput` 校验通过 |
+| 发送 | 注入器 tap 发送键，消息真的进了文件传输助手（截图确认） |
+| 事件 | `data/events/2026-11-17/run-r-20261117-011435-f0f2.jsonl` |
+| 各步耗时 | 点输入框 95ms、等稳定帧 2713ms、打字 192ms、校验 110ms、点发送 110ms、等稳定帧 2796ms |
+
+**等稳定帧的真相**：一次截图 ~650ms，`frames=2` 至少要 3 次采样 ≈ 2s。所以技能里 `timeoutMs` 必须 ≥3000，
+第一版给 1500ms 直接判失败（ratio=0 却说「不稳定」）。这条已修：只要拿够「连续 N 次没变」的证据就先判稳定。
+
+## 23. 零 OCR 读消息：长按 → 复制 → 读剪贴板
+
+`node tools/dev/read-bubble.ts --adb <adb> --rect 473,1526,433,111`
+
+```
+长按 689.5,1581.5（矩形 433×111）
+浮层 bbox 272,1140 776×388          ← 深色面板由行/列投影定位，不写死坐标
+点「复制」@ 350,1237
+剪贴板："引擎冒烟测试 v1"            ← 与发出的原文逐字一致
+```
+
+这是「读消息」的正确形态：不 OCR、不猜，复制到什么就是什么。
+浮层定位用 `findDarkPanel`（行/列投影），因为菜单锚定在气泡上、位置随气泡走。
