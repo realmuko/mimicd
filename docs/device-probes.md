@@ -214,3 +214,45 @@ ADBKeyboard 的 [README](https://github.com/senzhk/ADBKeyBoard) 里只有 `ADB_I
 **已知问题**：连通块会把相邻的小图标粘成一块（收藏前那张里骰子和手势被并成 148×140，填充 0.33，
 误判成「空心 +」）。所以下一版改成**按固定格切分**再判每格内容（格距 199、首格中心 125 已实测），
 而不是先做全局连通块。这个坑不踩第二次。
+
+---
+
+# 第三轮：注入器（2026-11-17 00:15–00:35）
+
+工具链装好（`.toolchain/`，330 MB，不入库）：JDK 17 + build-tools 34（d8）+ API 29 的 android.jar。
+注入器 11 KB dex，`app_process` 起在设备上，uid=2000（shell，自带 `INJECT_EVENTS`），TCP 7801 通过 `adb forward` 连。
+
+## 15. 事件参数可控性与时延精度
+
+| 命令 | 请求 | 实测 | 事件数 |
+|---|---|---|---|
+| `tap` | 65 ms | 65 ms | 5 MOVE |
+| `tap` | 40 ms | 41 ms | 3 MOVE |
+| `hold` | 800 ms | 800 ms | **0 MOVE** |
+| `swipe` | 400 ms | 400 ms | 40 步（1-(1-k)² 减速） |
+| `path` | 330 ms | 374 ms | 6 点 + 40 ms 尾保持 |
+
+首版 `hold` 发了 100 个 MOVE，实际跑成 990 ms（每次注入 ~1.9 ms 开销）。改成**绝对时间调度**后精确到 ±1 ms。
+`injectInputEvent` 全程返回 true（一百多次，0 失败）。
+
+## 16. 功能验证（在微信里真跑）
+
+成功的：点搜索图标进搜索页、点会话行进会话、点笑脸开表情面板、**长按会话行**弹出「标为未读/置顶/不显示/删除」、**长按消息气泡**弹出 10 项菜单。
+
+**关键发现：长按不能发 MOVE。**
+按住期间发 MOVE 时，消息气泡的长按不触发；改成 DOWN → 睡 → UP（0 个 MOVE）后立刻成功。
+列表行的长按反而容忍 MOVE —— 说明是各控件自己的长按判定不同。真人按住不动本来也不产生中间事件，所以「不发 MOVE」是正确的默认，不是权宜之计。
+
+## 17. 这一轮踩的坑（都已收进脚本）
+
+1. `pkill -f mimic.Injector` 会把执行它的 shell 一起杀掉（命令行自匹配）→ 用 `ps -A -o PID,ARGS | grep '[m]imic'` 取 PID。
+2. Android 10 的 `ps -A` **不显示命令行**，只有 `app_process`；要用 `-o PID,ARGS`。
+3. 重启时旧进程 socket 未释放 → bind EADDRINUSE；注入器内置 10 次重试。
+4. `MSYS_NO_PATHCONV=1` 能修 `adb push`，但会让 Node 拿到的 `--adb /d/...` 失效（spawn ENOENT）。**adb 命令统一走 Node 脚本**。
+5. 坐标会随面板开合/消息滚动漂移：两次长按失败都是因为这个，第三次先截图再按就成功了。
+
+## 18. 未验证的部分（重要）
+
+注入器知道自己设了 `pressure=0.55`、`downMs=65`，但**没有任何外部证据证明微信收到的是这些值**。
+要闭环必须有第三方观察者：一个极小的「触摸参数显示」APK，读 `MotionEvent.getPressure()/getSize()/getEventTime()/getDeviceId()` 并显示/落盘。
+这也是 L1 验收（与真机自采分布做 KS 检验）的前置条件。下一步值得做。
