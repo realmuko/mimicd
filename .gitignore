@@ -3,8 +3,9 @@ data/
 dist/
 *.log
 
+# 工具链（JDK / build-tools / android.jar），本机安装，不入库
+.toolchain/
+
 # 注入器构建产物
 android/injector/build/
-android/injector/*.dex.toolchain/
-
-.toolchain/
+android/injector/*.dex
