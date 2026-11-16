@@ -5,7 +5,11 @@
     "model": "BKL-AL20",
     "android": "10",
     "wechat": "8.0.80",
-    "screen": { "w": 1080, "h": 2160, "density": 480 }
+    "screen": {
+      "w": 1080,
+      "h": 2160,
+      "density": 480
+    }
   },
   "measuredAt": "2026-11-16",
   "note": "矩形一律用比例（0..1），以 1080×2160 为基准。换机/改版只改这里，技能不碰坐标。所有值来自实测截图，见 docs/device-probes.md。",
@@ -17,9 +21,24 @@
         "activity": "com.tencent.mm.ui.LauncherUI"
       },
       "elements": {
-        "search_icon": { "x": 0.822, "y": 0.041, "w": 0.06, "h": 0.03 },
-        "tab_bar": { "x": 0, "y": 0.945, "w": 1, "h": 0.03 },
-        "first_row": { "x": 0, "y": 0.075, "w": 1, "h": 0.08 }
+        "search_icon": {
+          "x": 0.822,
+          "y": 0.041,
+          "w": 0.06,
+          "h": 0.03
+        },
+        "tab_bar": {
+          "x": 0,
+          "y": 0.945,
+          "w": 1,
+          "h": 0.03
+        },
+        "first_row": {
+          "x": 0,
+          "y": 0.075,
+          "w": 1,
+          "h": 0.08
+        }
       }
     },
     "chat": {
@@ -28,18 +47,68 @@
         "signature": "顶部返回箭头 + 标题居中 + 底部输入栏（无 tab 栏）",
         "activity": "com.tencent.mm.ui.chatting.ChattingUI"
       },
-      "staticZones": ["header", "input_bar"],
-      "dirtyZones": ["message_area"],
+      "staticZones": [
+        "header",
+        "input_bar"
+      ],
+      "dirtyZones": [
+        "message_area"
+      ],
       "elements": {
-        "back": { "x": 0.03, "y": 0.04, "w": 0.06, "h": 0.04 },
-        "title": { "x": 0.35, "y": 0.045, "w": 0.3, "h": 0.035 },
-        "header": { "x": 0, "y": 0.03, "w": 1, "h": 0.05 },
-        "message_area": { "x": 0, "y": 0.08, "w": 1, "h": 0.86 },
-        "input_bar": { "x": 0, "y": 0.945, "w": 1, "h": 0.05 },
-        "voice_button": { "x": 0.037, "y": 0.968, "w": 0.07, "h": 0.035 },
-        "input_box": { "x": 0.12, "y": 0.952, "w": 0.62, "h": 0.042 },
-        "emoji_button": { "x": 0.80, "y": 0.968, "w": 0.07, "h": 0.035 },
-        "plus_button": { "x": 0.90, "y": 0.968, "w": 0.07, "h": 0.035 }
+        "back": {
+          "x": 0.03,
+          "y": 0.04,
+          "w": 0.06,
+          "h": 0.04
+        },
+        "title": {
+          "x": 0.35,
+          "y": 0.045,
+          "w": 0.3,
+          "h": 0.035
+        },
+        "header": {
+          "x": 0,
+          "y": 0.03,
+          "w": 1,
+          "h": 0.05
+        },
+        "message_area": {
+          "x": 0,
+          "y": 0.08,
+          "w": 1,
+          "h": 0.86
+        },
+        "input_bar": {
+          "x": 0,
+          "y": 0.945,
+          "w": 1,
+          "h": 0.05
+        },
+        "voice_button": {
+          "x": 0.037,
+          "y": 0.968,
+          "w": 0.07,
+          "h": 0.035
+        },
+        "input_box": {
+          "x": 0.12,
+          "y": 0.952,
+          "w": 0.62,
+          "h": 0.042
+        },
+        "emoji_button": {
+          "x": 0.8,
+          "y": 0.968,
+          "w": 0.07,
+          "h": 0.035
+        },
+        "plus_button": {
+          "x": 0.9,
+          "y": 0.968,
+          "w": 0.07,
+          "h": 0.035
+        }
       }
     },
     "sticker_panel": {
@@ -49,20 +118,68 @@
         "note": "打开后面板不自动关闭；连续发送时不要假设滚动位置不变"
       },
       "elements": {
-        "panel_top": { "x": 0, "y": 0.628, "w": 1, "h": 0.01 },
-        "tabs_row": { "x": 0, "y": 0.607, "w": 1, "h": 0.045 },
-        "tab_search": { "x": 0.063, "y": 0.607, "w": 0.06, "h": 0.045 },
-        "tab_emoji": { "x": 0.183, "y": 0.607, "w": 0.06, "h": 0.045 },
-        "tab_favorites": { "x": 0.318, "y": 0.607, "w": 0.06, "h": 0.045 },
-        "tab_more": { "x": 0.455, "y": 0.607, "w": 0.06, "h": 0.045 },
-        "grid_area": { "x": 0.03, "y": 0.672, "w": 0.94, "h": 0.3 }
+        "panel_top": {
+          "x": 0,
+          "y": 0.628,
+          "w": 1,
+          "h": 0.01
+        },
+        "tabs_row": {
+          "x": 0,
+          "y": 0.607,
+          "w": 1,
+          "h": 0.045
+        },
+        "tab_search": {
+          "x": 0.063,
+          "y": 0.607,
+          "w": 0.06,
+          "h": 0.045
+        },
+        "tab_emoji": {
+          "x": 0.183,
+          "y": 0.607,
+          "w": 0.06,
+          "h": 0.045
+        },
+        "tab_favorites": {
+          "x": 0.318,
+          "y": 0.607,
+          "w": 0.06,
+          "h": 0.045
+        },
+        "tab_more": {
+          "x": 0.455,
+          "y": 0.607,
+          "w": 0.06,
+          "h": 0.045
+        },
+        "grid_area": {
+          "x": 0.03,
+          "y": 0.672,
+          "w": 0.94,
+          "h": 0.3
+        }
       },
       "grid": {
-        "note": "收藏页不是统一网格：左区「添加的单个表情」格距 199px（0.184），右区「微信输入法」推广位格距约 100px。所以按序号取格之前必须先用内容框+直方图筛出真贴纸。",
-        "first_cell_center": { "x": 0.116, "y": 0.766 },
-        "pitch": { "x": 0.184, "y": 0 },
-        "cell": { "w": 0.095, "h": 0.083 }
-      }
+        "note": "收藏页不是统一网格：左区「添加的单个表情」格距 199px，右区「微信输入法」推广位格距约 100px。且**新收藏的贴纸插在最前面**（实测：收藏后 [+, 新贴纸, 旧贴纸]），会让所有槽位整体后移一位。所以序号不能跨收藏复用，每次开面板都要重新识别格子。",
+        "first_cell_center": {
+          "x": 0.116,
+          "y": 0.766
+        },
+        "pitch": {
+          "x": 0.184,
+          "y": 0
+        },
+        "cell": {
+          "w": 0.095,
+          "h": 0.083
+        }
+      },
+      "notes": [
+        "tab 与滚动位置是全局记忆的（两个不同会话里打开停在同一位置）",
+        "面板内容区整体 y 偏移在不同时刻可差 ~45px，格子坐标不可写死"
+      ]
     },
     "bubble_menu": {
       "detect": {
@@ -72,27 +189,174 @@
       "note": "菜单项由气泡类型决定；位置随气泡走，必须先检测浮层 bbox 再按相对格点取项。",
       "layouts": {
         "text_own": {
-          "items": ["copy", "forward", "collect", "delete", "multi_select", "quote", "remind", "read_aloud", "translate", "search"],
+          "items": [
+            "copy",
+            "forward",
+            "collect",
+            "delete",
+            "multi_select",
+            "quote",
+            "remind",
+            "read_aloud",
+            "translate",
+            "search"
+          ],
           "cols": 5,
           "rows": 2
         },
         "sticker_received": {
-          "items": ["add", "forward", "related", "delete", "multi_select", "co_locate", "quote", "remind", "read_aloud"],
+          "items": [
+            "add",
+            "forward",
+            "related",
+            "delete",
+            "multi_select",
+            "co_locate",
+            "quote",
+            "remind",
+            "read_aloud"
+          ],
           "cols": 5,
           "rows": 2,
           "note": "只有收到的贴纸才有 add（收藏）；自己的贴纸没有"
         }
       },
-      "item_cell": { "w": 0.2, "h": 0.5 }
+      "item_cell": {
+        "w": 0.2,
+        "h": 0.5
+      }
     },
     "article": {
       "detect": {
         "kind": "activity",
-        "signature": "mCurrentFocus 含 com.tencent.mm.plugin.webview 或 WebViewUI",
-        "activity": "com.tencent.mm.plugin.webview.ui.tools.WebViewUI"
+        "activity": "com.tencent.mm.plugin.brandservice.ui.timeline.preload.ui.TmplWebViewMMUI"
       },
-      "status": "未实测（需要一条链接）",
-      "elements": {}
+      "staticZones": [
+        "toolbar",
+        "bottom_bar"
+      ],
+      "dirtyZones": [
+        "body"
+      ],
+      "elements": {
+        "back": {
+          "x": 0.04,
+          "y": 0.062,
+          "w": 0.06,
+          "h": 0.04
+        },
+        "more": {
+          "x": 0.91,
+          "y": 0.062,
+          "w": 0.06,
+          "h": 0.04
+        },
+        "toolbar": {
+          "x": 0,
+          "y": 0.03,
+          "w": 1,
+          "h": 0.07
+        },
+        "title": {
+          "x": 0.05,
+          "y": 0.13,
+          "w": 0.9,
+          "h": 0.05
+        },
+        "meta": {
+          "x": 0.05,
+          "y": 0.175,
+          "w": 0.9,
+          "h": 0.03
+        },
+        "ai_summary": {
+          "x": 0.05,
+          "y": 0.222,
+          "w": 0.2,
+          "h": 0.028
+        },
+        "body": {
+          "x": 0.04,
+          "y": 0.27,
+          "w": 0.92,
+          "h": 0.65
+        },
+        "bottom_bar": {
+          "x": 0,
+          "y": 0.92,
+          "w": 1,
+          "h": 0.07
+        },
+        "follow": {
+          "x": 0.34,
+          "y": 0.955,
+          "w": 0.18,
+          "h": 0.04
+        }
+      },
+      "notes": [
+        "首帧 80KB 是空白骨架，约 3.5s 后才是有内容的帧",
+        "「…」菜单里没有「复制链接」，拿 URL 只能走浏览器（不推荐常规路径）",
+        "返回一次即回到原会话，滚动位置保留"
+      ]
+    },
+    "article_menu": {
+      "detect": {
+        "kind": "pixel",
+        "signature": "底部白色抽屉，2 行 × 6 图标 + 取消"
+      },
+      "layouts": {
+        "article": {
+          "cols": 6,
+          "rows": 2,
+          "items": [
+            "forward",
+            "moments",
+            "collect",
+            "search",
+            "open_browser",
+            "more",
+            "float",
+            "read_aloud",
+            "listen_later",
+            "save_image",
+            "dislike",
+            "report"
+          ]
+        }
+      },
+      "elements": {
+        "cancel": {
+          "x": 0.4,
+          "y": 0.945,
+          "w": 0.2,
+          "h": 0.04
+        }
+      }
+    },
+    "xiaowei": {
+      "detect": {
+        "kind": "activity",
+        "activity": "com.tencent.mm.plugin.flutter.ui.MMFlutterViewActivity"
+      },
+      "elements": {
+        "close": {
+          "x": 0.04,
+          "y": 0.075,
+          "w": 0.06,
+          "h": 0.035
+        },
+        "content": {
+          "x": 0.04,
+          "y": 0.13,
+          "w": 0.92,
+          "h": 0.75
+        }
+      },
+      "notes": [
+        "微信自带 AI 摘要（AI·测试版）：点文章标题下的「AI摘要」进入，约 4s 给出四段摘要 + 三个追问建议",
+        "Flutter 视图，a11y 为空；这是「快速读一篇文章」最便宜的路径"
+      ]
     }
   }
 }
