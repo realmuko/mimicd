@@ -22,6 +22,7 @@ import { dayStamp, makeRunId } from "../src/events.ts";
 import { SkillRegistry } from "../src/skills/registry.ts";
 import { SkillRunner } from "../src/skills/runner.ts";
 import { detectPage, decodeFrame, type PageGraph } from "../src/perception/page.ts";
+import { Ocr } from "../src/perception/ocr.ts";
 
 function arg(name: string, fallback = ""): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -86,7 +87,8 @@ eventLog.append(
   { src: "run-skill" },
 );
 
-const runner = new SkillRunner({ device: { adb, injector, ime }, actuator, graph, eventLog });
+const ocr = new Ocr({ script: resolve(arg("ocr-script", "tools/ocr/ocr.ps1")), workDir: join(dataDir, "tmp"), scale: Number(arg("ocr-scale", "3")) });
+const runner = new SkillRunner({ device: { adb, injector, ime }, actuator, graph, eventLog, ocr });
 const result = await runner.run(skill, resolved);
 eventLog.close();
 

@@ -25,7 +25,11 @@ if (!rectArg) {
   console.error("用法: node tools/dev/read-bubble.ts --adb <adb> --rect x,y,w,h");
   process.exit(1);
 }
-const [x, y, w, h] = rectArg.split(",").map(Number);
+const parts = rectArg.split(",").map(Number);
+const x = parts[0] ?? Number.NaN;
+const y = parts[1] ?? Number.NaN;
+const w = parts[2] ?? Number.NaN;
+const h = parts[3] ?? Number.NaN;
 if ([x, y, w, h].some((n) => !Number.isFinite(n))) {
   console.error("--rect 需要 x,y,w,h 四个数字");
   process.exit(1);

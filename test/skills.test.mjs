@@ -18,6 +18,7 @@ test("仓库里的三个微信技能全部通过校验", () => {
   assert.deepEqual(reg.issues, []);
   assert.deepEqual([...reg.skills.keys()].sort(), [
     "wechat.read_link",
+    "wechat.read_screen",
     "wechat.save_sticker",
     "wechat.send_sticker",
     "wechat.send_text",

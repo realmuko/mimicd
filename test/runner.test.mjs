@@ -258,7 +258,7 @@ test("runner：预算超了要停（不跑完全部步骤）", async () => {
   assert.equal(calls.filter((c) => c[0] === "tap").length, 1);
 });
 
-test("runner：没实现的操作抛错，不静默通过", async () => {
+test("runner：obs.ocr 没配置 OCR 时明确报错", async () => {
   const { device } = makeDevice();
   const actuator = new Actuator(device, { rng: createRng(5) });
   const runner = new SkillRunner({ device, actuator, graph: GRAPH });
@@ -269,5 +269,19 @@ test("runner：没实现的操作抛错，不静默通过", async () => {
   };
   const result = await runner.run(skill, { text: "x" });
   assert.equal(result.ok, false);
-  assert.match(result.reason, /还没实现/);
+  assert.match(result.reason, /没有配置 OCR/);
+});
+test("runner：配了 OCR 就跑 obs.ocr，并把文本放进 outputs", async () => {
+  const { device } = makeDevice();
+  const actuator = new Actuator(device, { rng: createRng(5) });
+  const ocr = {
+    async recognize(png, region) {
+      return { text: "引擎冒烟测试", lines: [{ text: "引擎冒烟测试", x: 0, y: 0, w: 10, h: 10 }], ms: 12 };
+    },
+  };
+  const runner = new SkillRunner({ device, actuator, graph: GRAPH, ocr });
+  const skill = { ...SKILL, pre: [{ kind: "page", value: "chat" }], steps: [{ op: "obs.ocr", args: { region: "chat.message_area" } }], post: [] };
+  const result = await runner.run(skill, { text: "x" });
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(result.outputs.step1.text, "引擎冒烟测试");
 });

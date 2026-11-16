@@ -23,6 +23,8 @@ export interface RunnerDeps {
   actuator: Actuator;
   graph: PageGraph;
   eventLog?: EventLog;
+  /** 有 OCR 才能跑 obs.ocr 类步骤 */
+  ocr?: import("../perception/ocr.ts").Ocr;
 }
 
 export interface RunResult {
@@ -271,8 +273,20 @@ export class SkillRunner {
         return { clipboard: text };
       }
 
+      case "obs.ocr": {
+        if (!this.#deps.ocr) throw new SkillRunError("没有配置 OCR（deps.ocr 为空）");
+        const shot = await this.#deps.device.adb.screencap();
+        const region = this.#regionFromArgs(args);
+        const result = await this.#deps.ocr.recognize(shot.png, region);
+        this.#deps.eventLog?.append(
+          "note",
+          { ocr: true, tag: String(args["tag"] ?? "ocr"), lines: result.lines.length, ms: result.ms, region: region ?? null },
+          { src: "skills.runner" },
+        );
+        return { text: result.text, lines: result.lines, ms: result.ms };
+      }
+
       case "branch":
-      case "obs.ocr":
       case "obs.a11y":
       case "act.paste":
         throw new SkillRunError(`操作 ${step.op} 还没实现（不静默跳过）`);
@@ -304,6 +318,16 @@ export class SkillRunner {
     if (!target) throw new SkillRunError(`${step.op} 需要 target 或 args.rect`);
     const screen = this.#deps.graph.device.screen;
     return rectOf(this.#deps.graph, target.page, target.element, screen.w, screen.h);
+  }
+
+  #regionFromArgs(args: Record<string, unknown>): { x: number; y: number; w: number; h: number } | undefined {
+    const raw = args["region"];
+    if (!raw) return undefined;
+    if (typeof raw === "object") return raw as { x: number; y: number; w: number; h: number };
+    const [page, element] = String(raw).split(".");
+    if (!page || !element) throw new SkillRunError("region 应为 page.element，收到 " + String(raw));
+    const screen = this.#deps.graph.device.screen;
+    return rectOf(this.#deps.graph, page, element, screen.w, screen.h);
   }
 
   #optionalRect(step: Step, regionName: string | undefined, fallback: string): Rect {

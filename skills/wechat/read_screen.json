@@ -1,0 +1,16 @@
+{
+  "id": "wechat.read_screen",
+  "version": 1,
+  "title": "读当前会话可见的消息（OCR）",
+  "page": "chat",
+  "intent": "read",
+  "params": {},
+  "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
+  "steps": [
+    { "op": "obs.ocr", "args": { "region": "chat.message_area", "tag": "chat-messages" } }
+  ],
+  "post": [{ "kind": "page", "value": "chat" }],
+  "budget": { "maxSteps": 3, "maxMs": 15000 },
+  "idempotency": "read",
+  "dryRun": "supported"
+}
