@@ -256,3 +256,50 @@ ADBKeyboard 的 [README](https://github.com/senzhk/ADBKeyBoard) 里只有 `ADB_I
 注入器知道自己设了 `pressure=0.55`、`downMs=65`，但**没有任何外部证据证明微信收到的是这些值**。
 要闭环必须有第三方观察者：一个极小的「触摸参数显示」APK，读 `MotionEvent.getPressure()/getSize()/getEventTime()/getDeviceId()` 并显示/落盘。
 这也是 L1 验收（与真机自采分布做 KS 检验）的前置条件。下一步值得做。
+
+---
+
+# 第四轮：自建探针 APK（2026-11-17 00:40–01:05）
+
+手工打包（aapt2 + javac + d8 + jar + zipalign + apksigner，不用 Gradle），16 KB，装进手机。
+两个能力：触摸参数探针、自建输入法。
+
+## 19. 触摸参数：注入器设的值确实到了应用侧
+
+| 字段 | 注入器设的 | 应用侧收到 |
+|---|---|---|
+| `pressure` | 0.550 | **0.550** |
+| `size` | 0.120 | **0.120** |
+| `toolMajor` | 24 px | **24.0** |
+| `downToEvent` | 65 / 700 / 300 ms | **66 / 702 / 300 ms** |
+| `source` | touchscreen | **4098** |
+| `history` | — | 0 |
+| `pointers` | 1 | 1 |
+| `deviceId` | 0 | **0** |
+
+**`deviceId=0`，不是 -1。** 这与调研里 AOSP `InputDispatcher::injectInputEvent` 的结论
+（注入事件被强制改写为 `VIRTUAL_KEYBOARD_ID=-1`，CTS 有对应用例）**不一致**。
+至少在这台 Honor / EMUI 10 上，「一行 `getDeviceId() < 0` 就能判定注入」不成立。
+需要复核的：是 Android 10 就没有这个改写，还是 EMUI 改了它，还是只在某些注入路径上生效。
+在此之前，任何「注入必被识别」的论断都要标注机型。
+
+## 20. 自建输入法：零 OCR 误差的文本通道成立
+
+| 命令 | 结果 |
+|---|---|
+| `SET_CLIPBOARD --es text mimic-clip-123` | ok |
+| `READ_CLIPBOARD` | **CLIP=mimic-clip-123**（adb shell 读不到的东西，这里读到了） |
+| `TYPE --es text hello-mimic` | ok committed=11 |
+| `READ_INPUT`（焦点在**微信搜索框**） | **BEFORE=hello-mimic** |
+
+最后一行是关键：微信把 a11y 封死，但输入法通过 `InputConnection` 照样能读到输入框里的原文。
+「复制 → 读剪贴板」「输入框 → 读原文」这两条高保真通道，现在都有实现，代价是装一个 APK 并临时切默认输入法。
+
+## 21. 这一轮的坑
+
+1. `TextView.setOnTouchListener` 只能收到内容区的触摸，窗口下半部分全丢 → 必须挂 `dispatchTouchEvent`。
+2. `<receiver>` 没有 `intent-filter` 时，`am broadcast -p <包>` **送不到**；要用 `-n <包>/.<类>`。
+3. `ime set` 改的是全局默认输入法，用完必须切回（否则用户打字打到探针里）。已切回 `com.android.adbkeyboard/.AdbIME`。
+4. APK 不改 `versionCode` 时，`pm install -r` 会「看起来成功、实际还是旧的」。
+5. EMUI 装 sideload 有**两次**确认框，「继续安装」的位置在两次里不同（y=2028 / y=1878），
+   不能按固定坐标点 → 用 `uiautomator dump` 找 `text="继续安装"` 的 bounds。已封装进 `tools/probe/install.ts`。

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="mimic.probe"
+    android:versionCode="2"
+    android:versionName="0.2">
+
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="29" />
+    <uses-permission android:name="android.permission.READ_CLIPBOARD" android:maxSdkVersion="28" />
+    <!-- versionCode 用来确认手机上跑的是哪一版 -->
+
+    <application
+        android:label="@string/app_name"
+        android:debuggable="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 自建输入法：读 InputConnection 与剪贴板（Android 10 起，默认输入法才有剪贴板豁免） -->
+        <service
+            android:name=".ProbeIme"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
+        <!-- 外部遥控：adb shell am broadcast -a mimic.READ_CLIPBOARD -p mimic.probe -->
+        <receiver
+            android:name=".CommandReceiver"
+            android:exported="true" />
+    </application>
+</manifest>

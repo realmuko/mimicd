@@ -9,3 +9,8 @@ dist/
 # 注入器构建产物
 android/injector/build/
 android/injector/*.dex
+
+# MimicProbe 构建产物与调试签名
+android/probe/build/
+android/probe/mimic-probe.apk
+android/probe/debug.keystore
