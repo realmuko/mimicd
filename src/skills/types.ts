@@ -18,8 +18,10 @@ export const OPS = [
   "act.type",
   "act.paste",
   "act.scroll",
+  "act.scroll_to_top",
   "act.back",
   "act.close_panel",
+  "act.tap_link_card",
   "act.tap_sticker_slot",
   // 观察（会产出事件/工件）
   "obs.screenshot",
@@ -29,6 +31,7 @@ export const OPS = [
   "obs.text_bubble",
   // 等待（等真实状态，不睡固定时间）
   "wait.element",
+  "wait.text_stable",
   "wait.stable",
   // 判定与流程
   "check",

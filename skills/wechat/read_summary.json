@@ -1,0 +1,34 @@
+{
+  "id": "wechat.read_summary",
+  "version": 1,
+  "title": "打开链接，用微信 AI 摘要读大意",
+  "page": "chat",
+  "intent": "read_link",
+  "params": {
+    "which": {
+      "type": "integer",
+      "min": 1,
+      "max": 10,
+      "required": false,
+      "desc": "第几张卡片（不填 = 最后一张）"
+    }
+  },
+  "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
+  "steps": [
+    { "op": "act.tap_link_card", "args": { "index": "$which" } },
+    { "op": "wait.element", "args": { "what": "article.title", "timeoutMs": 8000 } },
+    { "op": "act.scroll_to_top", "args": { "region": "article.body", "times": 3 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 5000 } },
+    { "op": "act.tap", "target": { "page": "article", "element": "ai_summary" } },
+    { "op": "wait.element", "args": { "what": "xiaowei.content", "timeoutMs": 8000 } },
+    { "op": "wait.text_stable", "args": { "region": "xiaowei.content", "timeoutMs": 15000, "minChars": 10 } },
+    { "op": "obs.ocr", "args": { "region": "xiaowei.content", "tag": "summary" } },
+    { "op": "act.back" },
+    { "op": "act.back" },
+    { "op": "wait.element", "args": { "what": "chat.input_bar", "timeoutMs": 5000 } }
+  ],
+  "post": [{ "kind": "page", "value": "chat", "message": "读完没回到会话页" }],
+  "budget": { "maxSteps": 14, "maxMs": 70000 },
+  "idempotency": "read",
+  "dryRun": "supported"
+}

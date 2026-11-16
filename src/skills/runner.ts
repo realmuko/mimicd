@@ -16,6 +16,7 @@ import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
 import { findDarkPanel } from "../perception/panel.ts";
 import { findStickerCells, type PanelGrid } from "../perception/cells.ts";
+import { findLinkCards } from "../perception/cards.ts";
 import { looksLikeInputBar } from "../perception/page.ts";
 import { bindSteps } from "./registry.ts";
 import type { Assertion, Skill, Step } from "./types.ts";
@@ -199,12 +200,79 @@ export class SkillRunner {
         return { slot: index, total: cells.length, fill: cell.fill, at: { x: Math.round(cx), y: Math.round(cy) } };
       }
 
+      case "act.tap_link_card": {
+        const shot = await this.#deps.device.adb.screencap();
+        const bmp = decode(shot.png);
+        const screen = this.#deps.graph.device.screen;
+        const area = rectOf(this.#deps.graph, "chat", "message_area", screen.w, screen.h);
+        const cards = findLinkCards(bmp, area);
+        if (cards.length === 0) throw new SkillRunError("消息区里没找到链接卡片");
+        const raw = args["index"];
+        const want = typeof raw === "number" ? raw : cards.length;
+        const index = Math.min(cards.length, Math.max(1, Math.round(want)));
+        const card = cards[index - 1]!;
+        const cx = card.rect.x + card.rect.w * 0.4;
+        const cy = card.rect.y + card.rect.h * 0.35;
+        await this.#deps.actuator.tapPoint(cx, cy, 60);
+        return { cards: cards.length, index, rect: card.rect };
+      }
+
+      case "act.scroll_to_top": {
+        const region = this.#optionalRect(step, args["region"] as string | undefined, "chat.message_area");
+        const times = Math.max(1, Math.min(6, Number(args["times"] ?? 3)));
+        for (let k = 0; k < times; k++) {
+          await this.#deps.actuator.swipe(
+            { x: region.x + region.w / 2, y: region.y + region.h * 0.25 },
+            { x: region.x + region.w / 2, y: region.y + region.h * 0.85 },
+            260,
+          );
+        }
+        return { toTop: times };
+      }
+
+      case "wait.text_stable": {
+        if (!this.#deps.ocr) throw new SkillRunError("没有配置 OCR");
+        const region = this.#regionFromArgs(args);
+        const checks = Math.max(1, Number(args["checks"] ?? 2));
+        const intervalMs = Math.max(100, Number(args["intervalMs"] ?? 600));
+        const timeoutMs = Math.max(1000, Number(args["timeoutMs"] ?? 10000));
+        const minChars = Math.max(0, Number(args["minChars"] ?? 10));
+        const t0 = Date.now();
+        let lastLen = -1;
+        let same = 0;
+        let text = "";
+        while (Date.now() - t0 < timeoutMs) {
+          const shot = await this.#deps.device.adb.screencap();
+          const r = await this.#deps.ocr.recognize(shot.png, region);
+          text = r.text;
+          if (text.length >= minChars && text.length === lastLen) {
+            same++;
+            if (same >= checks) return { text, stable: true, ms: Date.now() - t0 };
+          } else {
+            same = 0;
+          }
+          lastLen = text.length;
+          await new Promise((res) => setTimeout(res, intervalMs));
+        }
+        throw new SkillRunError(`等文字稳定超时（${timeoutMs}ms），当前 ${text.length} 字`);
+      }
+
       case "act.close_panel": {
         const shot = await this.#deps.device.adb.screencap();
         const bmp = decode(shot.png);
         if (looksLikeInputBar(bmp)) return { closed: false };
         await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
         return { closed: true };
+      }
+
+      case "act.paste": {
+        const text = String(args["text"] ?? "");
+        if (!text) throw new SkillRunError("act.paste 少了 text");
+        // 不走「长按输入框→粘贴」的菜单（位置不稳），直接用输入法提交；
+        // 同时把内容放进剪贴板，便于人工核对与后续复制。
+        await this.#deps.actuator.setClipboard(text);
+        await this.#deps.actuator.typeText(text);
+        return { pasted: text.length };
       }
 
       case "act.back": {

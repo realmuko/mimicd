@@ -1,0 +1,41 @@
+{
+  "id": "wechat.read_article",
+  "version": 2,
+  "title": "打开会话里的链接，读标题与正文",
+  "page": "chat",
+  "intent": "read_link",
+  "params": {
+    "which": {
+      "type": "integer",
+      "min": 1,
+      "max": 10,
+      "required": false,
+      "desc": "第几张卡片（不填 = 最后一张）"
+    },
+    "scrolls": {
+      "type": "integer",
+      "min": 0,
+      "max": 6,
+      "required": false,
+      "desc": "正文往下翻几屏（默认 2）"
+    }
+  },
+  "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
+  "steps": [
+    { "op": "act.tap_link_card", "args": { "index": "$which" } },
+    { "op": "wait.element", "args": { "what": "article.title", "timeoutMs": 8000 } },
+    { "op": "act.scroll_to_top", "args": { "region": "article.body", "times": 3 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 5000 } },
+    { "op": "obs.ocr", "args": { "region": "article.header", "tag": "article-header" } },
+    { "op": "obs.ocr", "args": { "region": "article.body", "tag": "article-body-1" } },
+    { "op": "act.scroll", "args": { "region": "article.body", "times": 2 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 5000 } },
+    { "op": "obs.ocr", "args": { "region": "article.body", "tag": "article-body-2" } },
+    { "op": "act.back" },
+    { "op": "wait.element", "args": { "what": "chat.input_bar", "timeoutMs": 5000 } }
+  ],
+  "post": [{ "kind": "page", "value": "chat", "message": "读完没回到会话页" }],
+  "budget": { "maxSteps": 14, "maxMs": 70000 },
+  "idempotency": "read",
+  "dryRun": "supported"
+}
