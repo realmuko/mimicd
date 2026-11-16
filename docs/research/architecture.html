@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>拟真控制终端 · 目标分层</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1600px; height: 1250px; background: #fbfbfc;
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    color: #1f2430; position: relative; overflow: hidden;
+  }
+  .title { position: absolute; left: 80px; top: 44px; font-size: 34px; font-weight: 700; letter-spacing: .5px; }
+  .sub   { position: absolute; left: 80px; top: 92px; font-size: 16.5px; color: #6b7482; }
+
+  .box { position: absolute; border: 1.6px solid; border-radius: 12px; padding: 13px 20px; background: #fff; }
+  .box h3 { font-size: 21px; font-weight: 700; margin-bottom: 6px; }
+  .box h3 .num { font-size: 15px; font-weight: 600; opacity: .75; margin-right: 8px; }
+  .box p  { font-size: 15.5px; line-height: 1.52; color: #3c4553; }
+  .box p b { color: #1f2430; }
+  code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 14px; background: rgba(0,0,0,.055); padding: 0 5px; border-radius: 4px; }
+
+  .blue   { background: #eaf2fd; border-color: #4a86d4; }
+  .amber  { background: #fff5e6; border-color: #dd8f22; }
+  .orange { background: #fdf0e4; border-color: #d4712c; }
+  .purple { background: #f4ecfc; border-color: #8459c8; }
+  .green  { background: #e9f7ef; border-color: #2f9e5f; }
+  .teal   { background: #e6f5f7; border-color: #1f8b93; }
+  .slate  { background: #eef1f6; border-color: #5b6a82; }
+  .gray   { background: #f5f6f8; border-color: #9aa3b2; }
+
+  .badge { display:inline-block; padding:2px 8px; border-radius:6px; background:#e6ebf3; color:#3d4a5c; margin:0 6px 6px 0; font-size:13px;}
+  .legend { position: absolute; left: 80px; top: 1178px; font-size: 14.5px; color: #6b7482; }
+  .legend b { color: #1f2430; }
+</style>
+</head>
+<body>
+
+<div class="title">拟真控制终端 · 目标分层（v0 提案）</div>
+<div class="sub">控制流自上而下，每一层都能单独替换；模型只出「意图」，坐标与手势由代码保证。</div>
+
+<!-- ================= 左列：控制流 ================= -->
+<div class="box blue"   style="left:80px; top:124px; width:960px; height:110px;">
+  <h3><span class="num">①</span>意图层 · DeepSeek 主模型</h3>
+  <p>只输出 <b>Intent</b>：<code>open_chat</code> · <code>reply(text)</code> · <code>send_sticker</code> · <code>read</code> · <code>wait</code> · <code>escalate</code>。<br>不出像素坐标、不拼 shell 串、不关心输入法怎么切。</p>
+</div>
+
+<div class="box amber"  style="left:80px; top:268px; width:960px; height:104px;">
+  <h3><span class="num">②</span>节奏层 · Presence &amp; Rhythm</h3>
+  <p>「她此刻在不在、要不要现在做」：在线时段门控 · 阅读停顿 · 回复延迟采样（双对数正态）· 会话与休息节奏。<br>模型 20–40 s 的思考时间，被这一层吸收成「像人」。</p>
+</div>
+
+<div class="box orange" style="left:80px; top:404px; width:960px; height:100px;">
+  <h3><span class="num">③</span>编排层 · Orchestrator</h3>
+  <p>Intent → 动作计划：预算 / 幂等键 / <code>pre</code> 前置断言 / 三重熔断 / 用户一碰手机就让位。<br>不可逆动作强制 dry-run + 确认，失败不补偿、升级给人。</p>
+</div>
+
+<div class="box purple" style="left:80px; top:536px; width:960px; height:104px;">
+  <h3><span class="num">④</span>拟真层 · Humanizer（新增，当前架构里没有这一层）</h3>
+  <p>把「点发送」变成一次人类手势：tap 时长 40–180 ms · 落点框内高斯 · 滑动加速-峰值-减速曲线 ·<br>逐字击键时间线（含错字、发现停顿、退格、补打）。</p>
+</div>
+
+<div class="box green"  style="left:80px; top:672px; width:960px; height:100px;">
+  <h3><span class="num">⑤</span>执行层 · Actuator</h3>
+  <p>唯一能改设备状态的地方：uinput / ADBKeyboard(base64) / adb tap 三条适配器；<br>单写者串行队列，每个动作带 <code>pre</code> 断言与按类型分档的 <code>settle_ms</code>。</p>
+</div>
+
+<div class="box teal"   style="left:80px; top:804px; width:960px; height:84px;">
+  <h3><span class="num">⑥</span>设备 · 真机微信 1080×2160</h3>
+  <p>USB + ADB，Android 10。「像不像人」最终都要在这一台机器上落地。</p>
+</div>
+
+<div class="box slate"  style="left:80px; top:920px; width:960px; height:104px;">
+  <h3><span class="num">⑦</span>感知层 · Perception</h3>
+  <p>a11y dump（有就用）· 截图 + 区域 OCR（微信主战场）· 像素探针（30 ms 判页面）· 帧差/帧计数判稳。<br>每份观察都带耗时与置信度；低置信时选择「不动」。</p>
+</div>
+
+<div class="box slate"  style="left:80px; top:1056px; width:960px; height:104px;">
+  <h3><span class="num">⑧</span>世界模型 · World State</h3>
+  <p>每个会话：类型（群 / 私聊 / unknown）· 未读 · 讨论串 · 冷却 · 最近发言；再加焦点 App、Activity、IME、屏幕状态。<br><b>unknown 时只做低风险动作</b>（进去看一眼，不主动开口）。</p>
+</div>
+
+<!-- ================= 右列：数据与闭环 ================= -->
+<div class="box gray" style="left:1100px; top:152px; width:440px; height:246px;">
+  <h3>事件总线 · EventStore</h3>
+  <p style="font-size:14.5px;">append-only JSONL，唯一的协调源。</p>
+  <p style="margin-top:10px;">
+    <span class="badge">Observed</span><span class="badge">Decided</span><br>
+    <span class="badge">Planned</span><span class="badge">Executed</span><br>
+    <span class="badge">Verified</span>
+  </p>
+  <p style="margin-top:12px; font-size:13.8px; color:#6a7383;">只存图片路径 + 哈希 + 尺寸，不存 base64；事件带 schema 版本，只增不删。</p>
+</div>
+
+<div class="box gray" style="left:1100px; top:430px; width:440px; height:170px;">
+  <h3>回放 &amp; 评测 · Replay</h3>
+  <p style="font-size:14.5px;">离线重放每一次观察与决策；改参数前后直接 diff，而不是「感觉好点了」。<br><span style="color:#2f8e57;">回放/重试模式强制 dry-run：永不再发一条消息。</span></p>
+</div>
+
+<div class="box gray" style="left:1100px; top:632px; width:440px; height:190px;">
+  <h3>拟真度量 · Realism Audit</h3>
+  <p style="font-size:14.5px;">L1 事件级：动作时序 vs 自采真人分布（KS 检验）<br>
+  L2 会话级：人盲猜 + 简单分类器判别<br>
+  L3 任务级：成功率 / 耗时（拟真不能牺牲功能）</p>
+</div>
+
+<div class="box gray" style="left:1100px; top:854px; width:440px; height:170px;">
+  <h3>记忆 · 人格 · 关系</h3>
+  <p style="font-size:14.5px;">fish-memory：跟谁聊过什么、说话风格、谁可以开玩笑。<br>这一层不是「拟真」，是「像她」。</p>
+</div>
+
+<div class="box gray" style="left:1100px; top:1056px; width:440px; height:104px;">
+  <h3>安全边界</h3>
+  <p style="font-size:14px;">屏幕内容 = 不可信数据，不是指令；<br>不可逆动作前先持久化，再请示。</p>
+</div>
+
+<!-- ================= 箭头 ================= -->
+<svg width="1600" height="1250" style="position:absolute; left:0; top:0; pointer-events:none;">
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7d8797"/>
+    </marker>
+    <marker id="arwD" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#aab2be"/>
+    </marker>
+    <marker id="arwB" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f9bd1"/>
+    </marker>
+  </defs>
+
+  <!-- 控制流 -->
+  <g stroke="#7d8797" stroke-width="1.8" fill="none" marker-end="url(#arw)">
+    <line x1="560" y1="234" x2="560" y2="264"/>
+    <line x1="560" y1="372" x2="560" y2="400"/>
+    <line x1="560" y1="504" x2="560" y2="532"/>
+    <line x1="560" y1="640" x2="560" y2="668"/>
+    <line x1="560" y1="772" x2="560" y2="800"/>
+    <line x1="560" y1="888" x2="560" y2="916"/>
+    <line x1="560" y1="1024" x2="560" y2="1052"/>
+  </g>
+
+  <!-- 各层写事件：汇流线 -->
+  <g stroke="#aab2be" stroke-width="1.5" stroke-dasharray="5 5" fill="none">
+    <line x1="1044" y1="179" x2="1078" y2="179"/>
+    <line x1="1044" y1="320" x2="1078" y2="320"/>
+    <line x1="1044" y1="454" x2="1078" y2="454"/>
+    <line x1="1044" y1="588" x2="1078" y2="588"/>
+    <line x1="1044" y1="722" x2="1078" y2="722"/>
+    <line x1="1044" y1="846" x2="1078" y2="846"/>
+    <line x1="1044" y1="972" x2="1078" y2="972"/>
+    <line x1="1044" y1="1108" x2="1078" y2="1108"/>
+  </g>
+  <line x1="1078" y1="179" x2="1078" y2="1108" stroke="#aab2be" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <line x1="1078" y1="240" x2="1096" y2="240" stroke="#aab2be" stroke-width="1.5" stroke-dasharray="5 5" marker-end="url(#arwD)"/>
+  <text x="1072" y="1160" font-size="12.5" fill="#98a1ae" text-anchor="end">写事件</text>
+
+  <!-- 总线 → 意图层（下一轮上下文） -->
+  <path d="M 1320 152 L 1320 130 L 1048 130" stroke="#6f9bd1" stroke-width="1.8" fill="none" stroke-dasharray="7 5" marker-end="url(#arwB)"/>
+  <text x="1326" y="126" font-size="13.5" fill="#4a7cba">下一轮上下文</text>
+
+  <text x="575" y="258" font-size="13" fill="#8a93a3">Intent</text>
+  <text x="575" y="394" font-size="13" fill="#8a93a3">何时</text>
+  <text x="575" y="526" font-size="13" fill="#8a93a3">动作序列</text>
+  <text x="575" y="662" font-size="13" fill="#8a93a3">手势时序</text>
+  <text x="575" y="794" font-size="13" fill="#8a93a3">注入</text>
+  <text x="575" y="910" font-size="13" fill="#8a93a3">截图 / 事件</text>
+  <text x="575" y="1046" font-size="13" fill="#8a93a3">结构化观察</text>
+</svg>
+
+<div class="legend">
+  <b>三层拟真预算：</b>L0 能跑（现状）→ <b>L1 不露馅</b>（通道 + 形态 + 节奏，性价比最高）→ L2 骗过判别（真人轨迹库、个性化，成本陡增，建议只做局部）
+</div>
+
+</body>
+</html>

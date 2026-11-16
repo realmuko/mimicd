@@ -1,0 +1,19 @@
+{
+  "name": "mimicd",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "拟真控制终端 · headless engine: perception → world → intent → rhythm → humanizer → actuator, with event log + replay",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
