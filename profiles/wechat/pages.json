@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "profile": "wechat",
+  "device": {
+    "model": "BKL-AL20",
+    "android": "10",
+    "wechat": "8.0.80",
+    "screen": { "w": 1080, "h": 2160, "density": 480 }
+  },
+  "measuredAt": "2026-11-16",
+  "note": "矩形一律用比例（0..1），以 1080×2160 为基准。换机/改版只改这里，技能不碰坐标。所有值来自实测截图，见 docs/device-probes.md。",
+  "pages": {
+    "list": {
+      "detect": {
+        "kind": "pixel",
+        "signature": "底部四簇 tab 栏 + 白底比例 > 0.45",
+        "activity": "com.tencent.mm.ui.LauncherUI"
+      },
+      "elements": {
+        "search_icon": { "x": 0.822, "y": 0.041, "w": 0.06, "h": 0.03 },
+        "tab_bar": { "x": 0, "y": 0.945, "w": 1, "h": 0.03 },
+        "first_row": { "x": 0, "y": 0.075, "w": 1, "h": 0.08 }
+      }
+    },
+    "chat": {
+      "detect": {
+        "kind": "pixel",
+        "signature": "顶部返回箭头 + 标题居中 + 底部输入栏（无 tab 栏）",
+        "activity": "com.tencent.mm.ui.chatting.ChattingUI"
+      },
+      "staticZones": ["header", "input_bar"],
+      "dirtyZones": ["message_area"],
+      "elements": {
+        "back": { "x": 0.03, "y": 0.04, "w": 0.06, "h": 0.04 },
+        "title": { "x": 0.35, "y": 0.045, "w": 0.3, "h": 0.035 },
+        "header": { "x": 0, "y": 0.03, "w": 1, "h": 0.05 },
+        "message_area": { "x": 0, "y": 0.08, "w": 1, "h": 0.86 },
+        "input_bar": { "x": 0, "y": 0.945, "w": 1, "h": 0.05 },
+        "voice_button": { "x": 0.037, "y": 0.968, "w": 0.07, "h": 0.035 },
+        "input_box": { "x": 0.12, "y": 0.952, "w": 0.62, "h": 0.042 },
+        "emoji_button": { "x": 0.80, "y": 0.968, "w": 0.07, "h": 0.035 },
+        "plus_button": { "x": 0.90, "y": 0.968, "w": 0.07, "h": 0.035 }
+      }
+    },
+    "sticker_panel": {
+      "detect": {
+        "kind": "pixel",
+        "signature": "输入栏上方出现浅灰面板 + 一行四个 tab 图标",
+        "note": "打开后面板不自动关闭；连续发送时不要假设滚动位置不变"
+      },
+      "elements": {
+        "panel_top": { "x": 0, "y": 0.628, "w": 1, "h": 0.01 },
+        "tabs_row": { "x": 0, "y": 0.607, "w": 1, "h": 0.045 },
+        "tab_search": { "x": 0.063, "y": 0.607, "w": 0.06, "h": 0.045 },
+        "tab_emoji": { "x": 0.183, "y": 0.607, "w": 0.06, "h": 0.045 },
+        "tab_favorites": { "x": 0.318, "y": 0.607, "w": 0.06, "h": 0.045 },
+        "tab_more": { "x": 0.455, "y": 0.607, "w": 0.06, "h": 0.045 },
+        "grid_area": { "x": 0.03, "y": 0.672, "w": 0.94, "h": 0.3 }
+      },
+      "grid": {
+        "note": "收藏页不是统一网格：左区「添加的单个表情」格距 199px（0.184），右区「微信输入法」推广位格距约 100px。所以按序号取格之前必须先用内容框+直方图筛出真贴纸。",
+        "first_cell_center": { "x": 0.116, "y": 0.766 },
+        "pitch": { "x": 0.184, "y": 0 },
+        "cell": { "w": 0.095, "h": 0.083 }
+      }
+    },
+    "bubble_menu": {
+      "detect": {
+        "kind": "pixel",
+        "signature": "暗色圆角浮层（约 RGB 60,60,60），锚定在被长按气泡的下方/上方"
+      },
+      "note": "菜单项由气泡类型决定；位置随气泡走，必须先检测浮层 bbox 再按相对格点取项。",
+      "layouts": {
+        "text_own": {
+          "items": ["copy", "forward", "collect", "delete", "multi_select", "quote", "remind", "read_aloud", "translate", "search"],
+          "cols": 5,
+          "rows": 2
+        },
+        "sticker_received": {
+          "items": ["add", "forward", "related", "delete", "multi_select", "co_locate", "quote", "remind", "read_aloud"],
+          "cols": 5,
+          "rows": 2,
+          "note": "只有收到的贴纸才有 add（收藏）；自己的贴纸没有"
+        }
+      },
+      "item_cell": { "w": 0.2, "h": 0.5 }
+    },
+    "article": {
+      "detect": {
+        "kind": "activity",
+        "signature": "mCurrentFocus 含 com.tencent.mm.plugin.webview 或 WebViewUI",
+        "activity": "com.tencent.mm.plugin.webview.ui.tools.WebViewUI"
+      },
+      "status": "未实测（需要一条链接）",
+      "elements": {}
+    }
+  }
+}
