@@ -1,0 +1,45 @@
+{
+  "id": "wechat.save_sticker",
+  "version": 1,
+  "title": "收藏别人发的表情",
+  "page": "chat",
+  "intent": "save_sticker",
+  "params": {
+    "bubble": {
+      "type": "integer",
+      "min": 1,
+      "max": 20,
+      "desc": "从底部往上数第几个气泡（1 = 最新一条）"
+    }
+  },
+  "pre": [
+    { "kind": "page", "value": "chat", "message": "必须先停在一个聊天页" },
+    { "kind": "element", "value": "chat.bubble.sticker", "message": "这一条不是贴纸，收藏不了" }
+  ],
+  "steps": [
+    { "op": "obs.screenshot", "args": { "tag": "before" } },
+    {
+      "op": "act.long_press",
+      "target": { "page": "chat", "element": "chat.bubble.sticker", "index": "$bubble" }
+    },
+    { "op": "wait.element", "args": { "what": "bubble_menu.panel", "timeoutMs": 1500 } },
+    { "op": "obs.screenshot", "args": { "tag": "menu" } },
+    {
+      "op": "act.tap",
+      "target": { "page": "bubble_menu", "element": "item.add" },
+      "expect": [{ "kind": "element", "value": "bubble_menu.item.add" }]
+    },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 1500 } },
+    {
+      "op": "check",
+      "args": { "kind": "sticker_count_increased" },
+      "message": "没有出现「已添加」提示：可能是动态表情/合并表情，收藏不了"
+    }
+  ],
+  "post": [
+    { "kind": "element", "value": "chat.input_bar", "message": "动作表没关掉，界面卡在浮层" }
+  ],
+  "budget": { "maxSteps": 10, "maxMs": 12000 },
+  "idempotency": "safe",
+  "dryRun": "supported"
+}

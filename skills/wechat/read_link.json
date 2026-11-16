@@ -1,0 +1,61 @@
+{
+  "id": "wechat.read_link",
+  "version": 1,
+  "title": "打开聊天里的链接读正文并记住",
+  "page": "chat",
+  "intent": "read_link",
+  "params": {
+    "card": {
+      "type": "integer",
+      "min": 1,
+      "max": 20,
+      "desc": "从底部往上数第几个链接卡片"
+    },
+    "maxScrolls": {
+      "type": "integer",
+      "min": 0,
+      "max": 12,
+      "desc": "最多往下翻几屏（长文别硬读完，人是会扫读的）"
+    },
+    "chat": {
+      "type": "string",
+      "required": false,
+      "desc": "当前会话标题；给的话返回后核对，不给就只看输入栏在不在"
+    }
+  },
+  "pre": [
+    { "kind": "page", "value": "chat", "message": "必须先停在一个聊天页" },
+    { "kind": "element", "value": "chat.bubble.link_card", "message": "这一条不是链接卡片" }
+  ],
+  "steps": [
+    { "op": "obs.screenshot", "args": { "tag": "chat_before" } },
+    {
+      "op": "act.tap",
+      "target": { "page": "chat", "element": "chat.bubble.link_card", "index": "$card" }
+    },
+    { "op": "wait.element", "args": { "what": "article.title", "timeoutMs": 8000 } },
+    { "op": "obs.screenshot", "args": { "tag": "article_top" } },
+    { "op": "obs.ocr", "args": { "region": "article.header", "tag": "article_meta" } },
+    { "op": "obs.ocr", "args": { "region": "article.body", "tag": "article_p1" } },
+    {
+      "op": "record",
+      "args": { "kind": "link.note", "fields": ["title", "author", "url?"] }
+    },
+    { "op": "act.scroll", "args": { "to": "next_page", "times": "$maxScrolls" }, "optional": true },
+    { "op": "obs.ocr", "args": { "region": "article.body", "tag": "article_p2" }, "optional": true },
+    { "op": "act.back" },
+    { "op": "wait.element", "args": { "what": "chat.input_bar", "timeoutMs": 5000 } },
+    {
+      "op": "check",
+      "args": { "kind": "same_chat", "expect": "$chat" },
+      "message": "返回后不在原来的会话里，先回会话再继续"
+    }
+  ],
+  "post": [
+    { "kind": "element", "value": "chat.input_bar", "message": "没回到聊天页，可能停在文章或列表" },
+    { "kind": "text_saved", "value": "link.article", "message": "正文没存进记忆，下次问起就答不上来" }
+  ],
+  "budget": { "maxSteps": 20, "maxMs": 45000 },
+  "idempotency": "read",
+  "dryRun": "supported"
+}
