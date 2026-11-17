@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --ink:#16202e; --muted:#5b6b80; --line:#d7dee8; --bg:#f5f7fb;
+    --blue:#2f6df6; --green:#15906b; --orange:#c46a12; --violet:#6d4ad6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#eef2f8;font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:var(--ink)}
+  .page{width:1240px;margin:0 auto;padding:34px 40px 40px;background:#fff}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:1px}
+  .sub{color:var(--muted);font-size:15px;margin-bottom:26px}
+  .sub b{color:var(--ink)}
+
+  .band{border:1.5px solid var(--line);border-radius:14px;padding:16px 18px;position:relative;background:#fff}
+  .band .tag{position:absolute;top:-13px;left:18px;background:#fff;padding:0 8px;font-size:13px;color:var(--muted);letter-spacing:.5px}
+  .band.device{background:linear-gradient(180deg,#fbfdff,#f2f7ff)}
+  .band.engine{background:linear-gradient(180deg,#f8fbff,#eef5ff);border-color:#bcd2f7}
+  .band.plugin{background:#fffdf7;border-color:#efdcb8}
+  .band.session{background:linear-gradient(180deg,#fbf9ff,#f3efff);border-color:#d8ccf5}
+
+  .row{display:flex;gap:14px}
+  .title-line{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .title-line .name{font-size:17px;font-weight:700}
+  .title-line .meta{font-size:12.5px;color:var(--muted)}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .dot.b{background:var(--blue)} .dot.g{background:var(--green)} .dot.o{background:var(--orange)} .dot.v{background:var(--violet)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{font-size:13px;padding:6px 10px;border-radius:9px;background:#fff;border:1px solid var(--line);color:#33445c}
+  .chip.b{border-color:#c6d8fb;background:#f4f8ff}
+  .chip.g{border-color:#c3e7da;background:#f2fbf7}
+  .chip.o{border-color:#f0dcbd;background:#fffaf1}
+  .chip.v{border-color:#ddd2f7;background:#f8f4ff}
+
+  .tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:12px 0}
+  .tile{background:#fff;border:1px solid #cfdcf2;border-radius:11px;padding:10px 11px}
+  .tile h4{margin:0 0 5px;font-size:14px}
+  .tile p{margin:0;font-size:12px;line-height:1.55;color:var(--muted)}
+
+  .http{margin-top:10px;background:#fff;border:1px dashed #b9cdf0;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#3b4d66}
+  .http code{font-family:Consolas,monospace;font-size:12px;color:#1d3f7a}
+
+  .arrow{display:flex;align-items:center;justify-content:center;height:46px;color:var(--muted);font-size:13px}
+  .arrow .line{width:2px;height:26px;background:#a9b8cf;position:relative}
+  .arrow .line:before,.arrow .line:after{content:"";position:absolute;left:-5px;border-left:6px solid transparent;border-right:6px solid transparent}
+  .arrow .line:before{top:-7px;border-bottom:8px solid #a9b8cf}
+  .arrow .line:after{bottom:-7px;border-top:8px solid #a9b8cf}
+  .arrow .label{margin-left:12px;background:#fff;padding:2px 9px;border:1px solid var(--line);border-radius:20px}
+
+  .flows{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}
+  .flow{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fbfcff}
+  .flow h3{margin:0 0 8px;font-size:14px}
+  .flow ol{margin:0;padding-left:18px;color:#3b4d66;font-size:12.5px;line-height:1.8}
+  .flow b{color:var(--ink)}
+
+  .foot{display:flex;justify-content:space-between;margin-top:22px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:12px}
+  .ok{color:var(--green);font-weight:700}
+  .warn{color:var(--orange);font-weight:700}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>拟真控制终端 v3 · 架构</h1>
+  <div class="sub"><b>引擎当手</b>（确定性、可回放）　·　<b>会话当脑子</b>（人格、记忆、判断）　·　中间只传「待办」和「一句话」</div>
+
+  <!-- 真机 -->
+  <div class="band device">
+    <div class="tag">真机 · USB</div>
+    <div class="title-line"><span class="dot b"></span><span class="name">微信 8.0.80 · 1080×2160</span><span class="meta">唯一被操控的东西</span></div>
+    <div class="chips">
+      <span class="chip b">触摸注入：app_process + dex（压力 / 面积 / 时长 / 轨迹可控）</span>
+      <span class="chip">截图 screencap</span>
+      <span class="chip">输入法广播 ADBKeyboard</span>
+      <span class="chip">剪贴板往返读消息</span>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="line"></div><div class="label">adb（仅本机、仅这一台）</div></div>
+
+  <!-- 引擎 -->
+  <div class="band engine">
+    <div class="tag">引擎 · mimicd（独立 Node 进程，127.0.0.1:65480）</div>
+    <div class="title-line"><span class="dot b"></span><span class="name">看 / 判 / 动 都在这</span><span class="meta">单写者：任何时刻只有一个动作碰手机</span></div>
+    <div class="tiles">
+      <div class="tile"><h4>感知</h4><p>Windows OCR（scale 4）· 页面判定 · 链接卡片 · 稳定帧 · 红点扫描</p></div>
+      <div class="tile"><h4>世界</h4><p>会话状态 · 多重集去重 · 最近上下文 · 落盘可重建</p></div>
+      <div class="tile"><h4>策略</h4><p>白名单 · 静默时段 · 冷却 · 限频 · 群聊 judge（全在代码里）</p></div>
+      <div class="tile"><h4>技能</h4><p>声明式 JSON：发文本 / 按情绪挑表情 / 收藏表情 / 读摘要 / 读正文</p></div>
+      <div class="tile"><h4>事件</h4><p>JSONL 每步一行 · 图片只存路径 · 可离线回放</p></div>
+    </div>
+    <div class="http">HTTP：<code>GET /health /state /pending</code>　<code>POST /pending/reply /pending/skip /observe/link /intent /control</code></div>
+  </div>
+
+  <div class="arrow"><div class="line"></div><div class="label">HTTP：待办上行，一句话下行（不传坐标）</div></div>
+
+  <!-- 插件 -->
+  <div class="band plugin">
+    <div class="tag">DSH 插件 · dsh-wechat-usb（瘦适配层）</div>
+    <div class="title-line"><span class="dot o"></span><span class="name">桥接 + 工具面 + 守卫</span><span class="meta">交接模式下旧执行工具一律拒绝（单写者纪律）</span></div>
+    <div class="chips">
+      <span class="chip o">每 8s 轮询 /pending → 唤醒会话</span>
+      <span class="chip">wechat_reply_pending(id, text｜stickerMood)</span>
+      <span class="chip">wechat_read_link(chat)</span>
+      <span class="chip">wechat_skip_pending(id, reason)</span>
+      <span class="chip">wechat_status / shot / config</span>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="line"></div><div class="label">schedule 唤醒 · prompt 带最近 8 条 + 待办 id</div></div>
+
+  <!-- 会话 -->
+  <div class="band session">
+    <div class="tag">DSH 会话 · 人格与记忆</div>
+    <div class="title-line"><span class="dot v"></span><span class="name">决定「像不像人」的那一层</span><span class="meta">引擎不编话，插件不碰 adb</span></div>
+    <div class="chips">
+      <span class="chip v">要不要接（群里没 @ 也自己判断）</span>
+      <span class="chip v">说什么 / 多长 / 口吻</span>
+      <span class="chip v">只回一个表情（七个情绪）</span>
+      <span class="chip v">先点开链接读完再说</span>
+    </div>
+  </div>
+
+  <!-- 三条链路 -->
+  <div class="flows">
+    <div class="flow">
+      <h3>① 收消息 → 回一句</h3>
+      <ol>
+        <li>扫列表红点 → 选会话</li>
+        <li>进会话 → <b>核对标题</b>（不对退回重试）</li>
+        <li>OCR 读尾部 → 去重 → 策略判</li>
+        <li>挂待办 → 唤醒会话</li>
+        <li>模型给一句话 → 引擎发送</li>
+      </ol>
+    </div>
+    <div class="flow">
+      <h3>② 丢来链接 → 读它</h3>
+      <ol>
+        <li>卡片标成 <b>[链接] 标题 · 来源</b></li>
+        <li>模型调 <b>wechat_read_link</b></li>
+        <li>引擎找卡片 → 点开 → 滚回顶部</li>
+        <li>AI 摘要优先；不行退回正文 OCR</li>
+        <li>文本回给模型，再决定怎么说</li>
+      </ol>
+    </div>
+    <div class="flow">
+      <h3>③ 表情 → 发或收</h3>
+      <ol>
+        <li>发：模型只给情绪，引擎挑图发</li>
+        <li>收：长按 → 收藏 → 视觉打标</li>
+        <li>好玩程度 ≥ 0.7 才入库（≤2 张/小时）</li>
+        <li>没起视觉模型时不碰手机</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>2026-11-17 真机验证：读链接回话 <span class="ok">✅</span> · 表情发送 <span class="ok">✅</span> · 群聊 judge 跳过 <span class="ok">✅</span> · 自动监测 <span class="ok">✅</span> · 自动收藏 <span class="warn">⚠ 待视觉模型</span></span>
+    <span>engine: <repo> · plugin: <dsh-wechat-usb></span>
+  </div>
+</div>
+</body>
+</html>
