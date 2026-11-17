@@ -493,13 +493,44 @@ export class SkillRunner {
           const addLine = menuOcr.lines.find((l) => /添\s*加/.test(l.text));
           if (!addLine) {
             const texts = menuOcr.lines.map((l) => l.text).join(" / ").slice(0, 80);
-            this.#deps.eventLog?.append("note", { op: "collect", menu: texts, skipped: addLine ? "no-add" : "no-add-item" }, { src: "skills.runner" });
-            // 是自己的贴纸（菜单里没有添加）：点一下标题栏把菜单收掉，再试上一张
-            await this.#deps.actuator.tapPoint(540, 100, 40);
+            this.#deps.eventLog?.append("note", { op: "collect", menu: texts, skipped: "no-add-item" }, { src: "skills.runner" });
+            // ⚠ 绝对不要用坐标点空白收菜单：菜单可能正好铺在上面，点到「删除」就会弹确认框（真机踩过）。
+            // 返回键只关浮层、不选中任何项，安全。
+            await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+            await new Promise((r) => setTimeout(r, 500));
+            continue;
+          }
+
+          // 长按后菜单可能还没稳定/又刷新了：点之前再确认一次「添加」还在，坐标以这一帧为准
+          const checkShot = await this.#deps.device.adb.screencap();
+          const checkBmp = decode(checkShot.png);
+          const panel2 = findDarkPanel(checkBmp);
+          if (!panel2) continue;
+          const again = await this.#deps.ocr.recognize(checkShot.png, {
+            x: panel2.rect.x,
+            y: panel2.rect.y - 12,
+            w: panel2.rect.w,
+            h: Math.min(420, panel2.rect.h * 2.4),
+          });
+          const addLine2 = again.lines.find((l) => /添\s*加/.test(l.text));
+          if (!addLine2) {
+            await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
             await new Promise((r) => setTimeout(r, 400));
             continue;
           }
-          await this.#deps.actuator.tapPoint(addLine.x + addLine.w / 2, addLine.y + addLine.h / 2, 60);
+          await this.#deps.actuator.tapPoint(addLine2.x + addLine2.w / 2, addLine2.y + addLine2.h / 2, 60);
+
+          // 安全网：万一弹了「确认删除」，只按「取消」，绝不能按删除
+          const afterShot = await this.#deps.device.adb.screencap();
+          const dialog = await this.#deps.ocr.recognize(afterShot.png, { x: 80, y: 700, w: 920, h: 720 });
+          const isDeleteDialog = dialog.lines.some((l) => /确认删除/.test(l.text));
+          if (isDeleteDialog) {
+            const cancel = dialog.lines.find((l) => /取\s*消/.test(l.text));
+            if (cancel) await this.#deps.actuator.tapPoint(cancel.x + cancel.w / 2, cancel.y + cancel.h / 2, 60);
+            else await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+            this.#deps.eventLog?.append("note", { op: "collect", incident: "delete-dialog-cancelled" }, { src: "skills.runner" });
+            continue;
+          }
           await new Promise((r) => setTimeout(r, 400));
           entry.collectedAt = Date.now();
           this.#deps.stickers.save();
