@@ -59,7 +59,7 @@ interface FileConfig {
   policy?: Partial<PolicyConfig>;
   /** 主动搭话（dsh-speak-up 掷骰子决定，引擎这边只负责限额与发送） */
   proactive?: { maxPerHour?: number; maxPerDay?: number; minGapMs?: number; allowGroups?: boolean };
-  autochat?: Partial<AutoChatConfig>;
+  autochat?: Partial<AutoChatConfig> & { collectEveryMin?: number };
   brain?:
     | { kind: "scripted"; template?: string }
     | { kind: "http"; url: string; model: string; apiKey?: string; system?: string }
@@ -132,7 +132,7 @@ const handoffMode = fileConfig.brain?.kind === "handoff";
 const pending = handoffMode ? new PendingQueue() : undefined;
 /** 群聊「交给主模型判断」的次数上限：群里一直有人在聊时，不该每轮都叫醒一次模型 */
 const judgmentTimes = new Map<string, number[]>();
-const MAX_JUDGMENTS_PER_HOUR = 6;
+const MAX_JUDGMENTS_PER_HOUR = 20; // 用户 2026-11-17：群里可以多接点话
 
 const brain: Brain =
   handoffMode
@@ -213,6 +213,25 @@ async function visionAvailable(): Promise<boolean> {
     labelerUp = false;
   }
   return labelerUp;
+}
+
+/** 空闲时的「收藏巡检」：没有白名单未读时，定时进最近聊过的白名单会话收一遍表情。 */
+let lastCollectPass = 0;
+const COLLECT_EVERY_MS = (fileConfig.autochat?.collectEveryMin ?? 10) * 60_000;
+
+async function collectPass(): Promise<void> {
+  const wl = autoCfg.policy.whitelist ?? [];
+  const chats = Object.values(world.snapshot().chats ?? {}) as Array<{ name: string; lastSeenAt: number }>;
+  const pool = chats.filter((c) => wl.length === 0 || wl.includes(c.name));
+  // 世界还没热起来（刚重启）就退到白名单里的第一个会话，别什么都不做
+  const chat = pool.sort((a, b) => (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0))[0]?.name ?? wl[0];
+  if (!chat) return;
+  if (!(await enterChat(chat))) return;
+  const skill = registry.get("wechat.collect_sticker");
+  if (!skill) return;
+  const result = await skillsRunner.run(skill, { funnyThreshold: "0.7" });
+  const collected = Boolean((result.outputs["step1"] as { collected?: boolean } | undefined)?.collected);
+  eventLog.append("note", { stage: "collect-pass", chat, collected, reason: result.reason ?? null }, { src: "proactive" });
 }
 
 const auto = new AutoChat({
@@ -503,6 +522,16 @@ async function loop(): Promise<void> {
     }
     const result = await exclusive("tick", () => auto.tick());
     state.lastTick = { at: Date.now(), acted: result.acted, reason: result.reason, replied: result.replied, chat: result.chat };
+    world.save(); // 每轮落盘：强杀进程时也不至于丢光会话状态
+    // 没有白名单未读 → 顺手做一次收藏巡检（不然红点被读掉后永远收不到新表情）
+    if (!result.acted && /没有未读|未读都不在白名单/.test(result.reason) && Date.now() - lastCollectPass > COLLECT_EVERY_MS) {
+      lastCollectPass = Date.now();
+      try {
+        await exclusive("collect-pass", collectPass);
+      } catch (err) {
+        console.log(`[collect-pass] 出错：${(err as Error).message}`);
+      }
+    }
     console.log(`[tick] ${new Date().toISOString()} acted=${result.acted} replied=${result.replied ?? false} chat=${result.chat ?? "-"} ${result.reason} (${result.ms}ms)`);
   } catch (err) {
     console.log(`[tick] 出错：${(err as Error).message}`);

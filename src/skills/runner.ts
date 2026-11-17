@@ -456,7 +456,8 @@ export class SkillRunner {
           const piece = crop(bmp, bubble.rect);
           const feat = stickerFeatures(piece);
           const known = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash);
-          if (known?.collectedAt) return { collected: false, reason: `已经收藏过（${known.mood}）` };
+          // 这张已经收过：继续看上一张，别停在这里（否则同一个会话永远只收得到最新那一张）
+          if (known?.collectedAt) continue;
 
           const label = known
             ? { mood: known.mood, tags: known.tags, funny: known.funny }

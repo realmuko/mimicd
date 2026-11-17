@@ -176,9 +176,28 @@ export interface ScanResult {
   badges: number;
 }
 
+/** 「有人@我」预览：微信有时不给红点（只在预览里显示红字），但这类行必须当未读。 */
+const MENTION_PREVIEW = /有人\s*[@＠]\s*我/;
+
 /** 一次扫描：红点 → 行 → OCR 匹配名字。 */
 export function scanList(bmp: Bitmap, lines: OcrLine[], area: Rect, opts: ScanOptions = {}): ScanResult {
   const badges = findRedBadges(bmp, area, opts);
   const rows = matchNames(lines, unreadRows(badges));
+
+  // 红点漏了的「有人@我」行补进来（名字在这一行上方，间隔不超过 140px）
+  const seen = new Set(rows.map((r) => r.name));
+  for (const line of lines) {
+    if (!MENTION_PREVIEW.test(line.text)) continue;
+    if (line.y < area.y || line.y > area.y + area.h) continue;
+    const above = lines
+      .filter((l) => isNameLine(l) && l.y + l.h <= line.y + 10 && line.y - (l.y + l.h) <= 140)
+      .sort((a, b) => b.y - a.y)[0];
+    if (!above) continue;
+    const name = cleanName(above.text);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    rows.push({ name, y: above.y + above.h / 2, unread: 1 });
+  }
+  rows.sort((a, b) => a.y - b.y);
   return { rows, badges: badges.length };
 }

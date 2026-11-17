@@ -144,3 +144,20 @@ test("messagesFromOcr：有截图时用颜色判，长气泡不会把「我」�
   const fallback = messagesFromOcr(lines, { width: 600 });
   assert.equal(fallback[0].from, "other");
 });
+
+test("列表扫描：没有红点、只有「有人@我」的行也算未读", () => {
+  // scanList 已从顶部 import
+  const bmp = { width: 1080, height: 2160, data: Buffer.alloc(1080 * 2160 * 4, 237) };
+  for (let i = 0; i < 1080 * 2160; i++) {
+    bmp.data[i * 4 + 3] = 255;
+  }
+  const lines = [
+    { text: "摸鱼闲聊群", x: 200, y: 400, w: 400, h: 44 },
+    { text: "[有人@我] 群打灰机器人：突然发个表情包什么意思", x: 200, y: 470, w: 700, h: 32 },
+  ];
+  const area = { x: 0, y: 150, w: 1080, h: 1800 };
+  const scan = scanList(bmp, lines, area);
+  assert.equal(scan.rows.length, 1);
+  assert.equal(scan.rows[0].name, "摸鱼闲聊群");
+  assert.equal(scan.rows[0].unread, 1);
+});
