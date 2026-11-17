@@ -68,7 +68,15 @@ if (registry.issues.length > 0) console.error("技能问题：\n" + registry.iss
 const adb = new Adb({ adbPath, serial });
 const injector = new InjectorClient({ port: 7801 });
 const ime = new ImeClient(adb);
-await adb.forward(7801, 7801);
+
+try {
+  await adb.forward(7801, 7801);
+} catch (err) {
+  console.error(`\n连不上手机：${(err as Error).message}`);
+  console.error('先确认 adb devices 能看到设备，再跑 node tools/inject/deploy.ts --adb "<adb>"');
+  process.exit(3);
+}
+
 await injector.ping().catch(() => {
   console.error('注入器没响应：先跑 node tools/inject/deploy.ts --adb "<adb>"');
   process.exit(3);
