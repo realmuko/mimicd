@@ -28,7 +28,7 @@ export interface ReadOptions {
 }
 
 const TIME_LIKE = /^(\d{1,2}[:：]\d{2}|\d{4}年|\d{1,2}月\d{1,2}日|昨天|今天|前天|上午|下午|凌晨|晚上|中午)/;
-const SYSTEM_LIKE = /(以下为新消息|撤回|加入了群聊|邀请.*加入|被移出|拍了拍|对方正在输入)/;
+const SYSTEM_LIKE = /(以下为新消息|撤回|加入了群聊|邀请.*加入|被移出|拍了拍|对方正在输入|有人\s*[@＠]\s*我)/;
 
 export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessage[] {
   const meRatio = opts.meRatio ?? 0.55;
@@ -39,6 +39,9 @@ export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessag
     const text = line.text.trim();
     if (!text) continue;
     if (line.h < minHeight) continue;
+    // 群聊里气泡上方有发送者昵称（小字、靠左），头像附近还有数字噪声 —— 都不是消息正文
+    if (line.h < 34 && line.x < opts.width * 0.25) continue;
+    if (/^\d+$/.test(text)) continue;
     if (TIME_LIKE.test(text)) continue;
     if (SYSTEM_LIKE.test(text)) continue;
     // 纯符号/单字符（OCR 噪声）
@@ -58,12 +61,16 @@ export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessag
 }
 
 /** 把同一侧的连续行合并成一条消息（气泡换行会被 OCR 拆成多行）。 */
-export function mergeBubbles(messages: ReadMessage[], lineGap = 24): ReadMessage[] {
+export function mergeBubbles(messages: ReadMessage[], lineGap = 34): ReadMessage[] {
   const out: ReadMessage[] = [];
   for (const msg of messages) {
     const prev = out[out.length - 1];
-    if (prev && prev.from === msg.from && msg.y - (prev.y + prev.h) < lineGap) {
+    // 同一个气泡里的换行：同侧、纵向间隔小于「行距阈值」与「0.9 倍字高」中较大的那个
+    const gap = prev ? msg.y - (prev.y + prev.h) : Number.POSITIVE_INFINITY;
+    if (prev && prev.from === msg.from && gap < Math.max(lineGap, prev.h * 0.9)) {
       prev.text = `${prev.text}${needsSpace(prev.text, msg.text) ? " " : ""}${msg.text}`;
+      // 合并后把 y/h 更新到「最后一行」，否则下一行的间隔是按第一行算的，永远合不上
+      prev.y = msg.y;
       prev.h = msg.h;
       continue;
     }

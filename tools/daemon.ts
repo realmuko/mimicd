@@ -38,6 +38,12 @@ const serial = arg("serial");
 const intervalSec = Number(arg("interval", "20"));
 const port = Number(arg("port", "65480"));
 const dryRun = flag("dry-run");
+const forceChat = arg("chat", "");
+const noSend = flag("no-send");
+if (forceChat && !dryRun && !noSend && !flag("targeted-send-ok")) {
+  console.error("定向会话（--chat）默认不允许真发。要真发请显式加 --targeted-send-ok。");
+  process.exit(5);
+}
 const once = flag("once");
 const dataDir = resolve(arg("data", "data"));
 const graphPath = resolve(arg("graph", "profiles/wechat/pages.json"));
@@ -59,6 +65,15 @@ try {
   fileConfig = JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8")) as FileConfig;
 } catch {
   // 没有配置文件就用默认值
+}
+
+// 安全闸：真发模式下白名单为空 = 什么会话都可能回。先于连设备检查。
+const earlyWhitelist = (fileConfig.policy?.whitelist ?? []) as string[];
+if (!dryRun && !noSend && earlyWhitelist.length === 0 && !flag("allow-all")) {
+  console.error("白名单为空。真发模式下这会回复任何会话（包括群）。");
+  console.error("二选一：配置 data/config.json 的 policy.whitelist，或加 --allow-all 明确同意。");
+  console.error("先试跑：node tools/daemon.ts --adb \"<adb>\" --once --dry-run");
+  process.exit(4);
 }
 
 const graph = JSON.parse(readFileSync(graphPath, "utf8")) as PageGraph;
@@ -120,7 +135,18 @@ const autoCfg: AutoChatConfig = {
   ...fileConfig.autochat,
   policy: { ...(fileConfig.autochat?.policy ?? {}), ...(fileConfig.policy ?? {}) },
   rowTapX: fileConfig.autochat?.rowTapX ?? Math.round(graph.device.screen.w * 0.3),
+  forceChat: arg("chat", "") || undefined,
+  noSend,
 };
+
+// 安全闸：真发模式下白名单为空 = 什么会话都可能回。默认拒绝启动。
+const whitelist = autoCfg.policy.whitelist ?? [];
+if (!dryRun && !noSend && whitelist.length === 0 && !flag("allow-all")) {
+  console.error("白名单为空。真发模式下这会回复任何会话（包括群）。");
+  console.error("二选一：配置 data/config.json 的 policy.whitelist，或加 --allow-all 明确同意。");
+  console.error("先试跑：node tools/daemon.ts --adb \"<adb>\" --once --dry-run");
+  process.exit(4);
+}
 
 const auto = new AutoChat({
   device: { adb, injector, ime },

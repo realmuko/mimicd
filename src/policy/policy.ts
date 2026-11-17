@@ -6,6 +6,7 @@
  */
 
 import type { ChatState, SeenMessage } from "../world/state.ts";
+import { mentionsMe } from "../monitor/chat.ts";
 
 export interface PolicyConfig {
   /** 只理这些会话；空数组表示不限 */
@@ -20,6 +21,10 @@ export interface PolicyConfig {
   requireOtherSide: boolean;
   /** 单条回复最长字符数 */
   maxReplyChars: number;
+  /** 群聊里只回 @ 我的 */
+  groupMentionOnly: boolean;
+  /** 我自己的昵称（用于识别 @） */
+  selfNames: string[];
 }
 
 export const DEFAULT_POLICY: PolicyConfig = {
@@ -29,6 +34,8 @@ export const DEFAULT_POLICY: PolicyConfig = {
   maxPerHour: 6,
   requireOtherSide: true,
   maxReplyChars: 200,
+  groupMentionOnly: true,
+  selfNames: [],
 };
 
 export interface Decision {
@@ -68,6 +75,11 @@ export function decide(input: DecideInput): Decision {
     if (inQuietHours(hour, cfg.quietHours)) {
       return { reply: false, reason: `静默时段（${cfg.quietHours[0]}–${cfg.quietHours[1]} 点）` };
     }
+  }
+
+  if (chat.kind === "group" && cfg.groupMentionOnly) {
+    const mentioned = input.fresh.some((m) => m.from === "other" && mentionsMe(m.text, cfg.selfNames));
+    if (!mentioned) return { reply: false, reason: "群里没 @ 我" };
   }
 
   if (cfg.requireOtherSide) {

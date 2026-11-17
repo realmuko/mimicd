@@ -166,3 +166,28 @@ test("World + 策略：真实一轮（收到→判定→记账）", () => {
   const again = w.ingest("张三", [{ text: "在吗", from: "other", y: 500, source: "ocr" }], NOON + 1000);
   assert.equal(again.length, 0, "同一句话不该重复触发");
 });
+test("策略：群里没 @ 我不回，@ 了就回", () => {
+  const group = chatState({ name: "家庭群", kind: "group" });
+  const noMention = decide({
+    now: NOON,
+    chat: group,
+    fresh: [fresh("今天谁做饭")],
+    config: { selfNames: ["阿鲤"], groupMentionOnly: true },
+  });
+  assert.equal(noMention.reply, false);
+  assert.match(noMention.reason, /群里没 @ 我/);
+
+  const mentioned = decide({
+    now: NOON,
+    chat: group,
+    fresh: [fresh("@阿鲤 今天谁做饭")],
+    config: { selfNames: ["阿鲤"], groupMentionOnly: true },
+  });
+  assert.equal(mentioned.reply, true, mentioned.reason);
+
+  // 私聊不受这条限制
+  assert.equal(
+    decide({ now: NOON, chat: chatState(), fresh: [fresh("在吗")], config: { selfNames: ["阿鲤"] } }).reply,
+    true,
+  );
+});

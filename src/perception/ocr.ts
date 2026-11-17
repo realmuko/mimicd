@@ -91,7 +91,7 @@ export class Ocr {
       });
       const parsed = JSON.parse(stdout.trim()) as { lines?: OcrLine[] };
       const lines = (parsed.lines ?? []).map((l) => ({
-        text: String(l.text ?? ""),
+        text: despaceCjk(String(l.text ?? "")),
         x: Number(l.x ?? 0),
         y: Number(l.y ?? 0),
         w: Number(l.w ?? 0),

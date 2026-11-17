@@ -13,7 +13,8 @@ import type { Ocr } from "../perception/ocr.ts";
 import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
 import { messagesFromOcr, mergeBubbles } from "../monitor/read.ts";
-import { scanList } from "../monitor/scan.ts";
+import { cleanName, isNameLine, scanList } from "../monitor/scan.ts";
+import { detectChatKind, titleFromOcr, titleMatches } from "../monitor/chat.ts";
 import { decide, pickChat, type PolicyConfig } from "../policy/policy.ts";
 import type { Brain } from "../brain/brain.ts";
 
@@ -28,6 +29,10 @@ export interface AutoChatConfig {
   perChatCooldownMs: number;
   /** 一轮里最多退几次回到列表 */
   maxBackSteps: number;
+  /** 定向跑一个会话（不看未读；只允许配合 no-send/dry-run 使用） */
+  forceChat?: string;
+  /** 只走流程不真发：允许点击/翻页/读屏，但绝不打字和按发送 */
+  noSend?: boolean;
 }
 
 export const DEFAULT_AUTOCHAT: AutoChatConfig = {
@@ -72,16 +77,14 @@ export class AutoChat {
   async tick(): Promise<TickResult> {
     if (this.#busy) return { acted: false, reason: "上一轮还没跑完", ms: 0 };
     this.#busy = true;
-    const t0 = Date.now();
     try {
-      return await this.#tick();
+      return await this.#tick(0);
     } finally {
       this.#busy = false;
-      void t0;
     }
   }
 
-  async #tick(): Promise<TickResult> {
+  async #tick(attempt: number): Promise<TickResult> {
     const d = this.#d;
     const t0 = Date.now();
 
@@ -91,7 +94,8 @@ export class AutoChat {
       return { acted: false, reason: "回不到会话列表（可能有浮层/搜索页）", ms: Date.now() - t0 };
     }
 
-    // 2) 扫列表：红点 + OCR
+    // 2) 扫列表：红点 + OCR（先等列表稳定，刚拉起微信时还在加载）
+    await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000 });
     const listShot = await d.device.adb.screencap();
     const listBmp = decode(listShot.png);
     const screen = d.graph.device.screen;
@@ -105,26 +109,54 @@ export class AutoChat {
       { src: "monitor" },
     );
 
-    if (scan.rows.length === 0) {
-      return { acted: false, reason: "列表里没有未读", ms: Date.now() - t0 };
-    }
+    let name: string | null;
+    let rowY: number;
 
-    // 3) 选一个会话
-    const name = pickChat(scan.rows, (this.#cfg.policy.whitelist ?? []).slice());
-    if (!name) return { acted: false, reason: "未读都不在白名单", ms: Date.now() - t0 };
-    const row = scan.rows.find((r) => r.name === name)!;
+    if (this.#cfg.forceChat) {
+      // 定向模式：不要求未读，直接在列表 OCR 里找这个名字
+      const want = this.#cfg.forceChat.replace(/\s+/g, "");
+      const hit = listOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(want));
+      if (!hit) return { acted: false, reason: `列表里没找到「${this.#cfg.forceChat}」`, ms: Date.now() - t0 };
+      name = cleanName(hit.text);
+      rowY = hit.y + hit.h / 2;
+      d.eventLog?.append("note", { stage: "force-chat", hit: { text: hit.text, y: hit.y, h: hit.h }, tapY: Math.round(rowY) }, { src: "monitor" });
+    } else {
+      if (scan.rows.length === 0) {
+        return { acted: false, reason: "列表里没有未读", ms: Date.now() - t0 };
+      }
+      name = pickChat(scan.rows, (this.#cfg.policy.whitelist ?? []).slice());
+      if (!name) return { acted: false, reason: "未读都不在白名单", ms: Date.now() - t0 };
+      rowY = scan.rows.find((r) => r.name === name)!.y;
+    }
 
     // 4) 进去
-    await d.actuator.tapPoint(this.#cfg.rowTapX, Math.round(row.y), 60);
-    const stable = await waitStable(d.device.adb, { frames: 2, timeoutMs: 5000 });
-    if (!stable.stable) {
+    await d.actuator.tapPoint(this.#cfg.rowTapX, Math.round(rowY), 60);
+    const entered = await this.#waitPage("chat", 6000);
+    if (!entered) {
       await this.#backToList();
-      return { acted: false, chat: name, reason: "进会话后画面没稳定", ms: Date.now() - t0 };
+      return { acted: false, chat: name, reason: "点了会话行但没进到聊天页", ms: Date.now() - t0 };
     }
+    await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000 });
 
-    // 5) 读尾部消息
+    // 5) 核对标题（点错行/界面没切过去就别回），顺便定群/私聊
     const chatShot = await d.device.adb.screencap();
     const chatBmp: Bitmap = decode(chatShot.png);
+    // 标题只在中间那条带里：整条头栏会把「〈 未读数」也读进来，最长的那行反而不是标题
+    const headerArea = rectOf(d.graph, "chat", "title_strip", screen.w, screen.h);
+    const headerOcr = await d.ocr.recognize(chatShot.png, headerArea);
+    const title = titleFromOcr(headerOcr.lines);
+    if (title && !titleMatches(name, title)) {
+      d.eventLog?.append("note", { stage: "enter-chat", wanted: name, got: title }, { src: "monitor" });
+      await this.#backToList();
+      if (this.#cfg.forceChat && attempt < 1) {
+        await this.#backToList();
+        return this.#tick(attempt + 1);
+      }
+      return { acted: false, chat: name, reason: `进错会话：想进「${name}」，实际「${title}」`, ms: Date.now() - t0 };
+    }
+    const kind = detectChatKind(title || name);
+    d.world.patch(name, { kind });
+
     const chatArea = rectOf(d.graph, "chat", "message_area", screen.w, screen.h);
     const chatOcr = await d.ocr.recognize(chatShot.png, chatArea);
     const parsed = mergeBubbles(
@@ -170,7 +202,13 @@ export class AutoChat {
 
     const text = replyText.slice(0, this.#cfg.policy.maxReplyChars ?? 200);
 
-    // 8) 发
+    // 8) 发（干跑/不发送模式只记账，不真发）
+    if (d.actuator.dryRun || this.#cfg.noSend) {
+      d.eventLog?.append("note", { stage: "send", dryRun: true, noSend: Boolean(this.#cfg.noSend), chat: name, text }, { src: "monitor" });
+      await this.#backToList();
+      return { acted: true, chat: name, replied: false, reply: text, reason: `干跑/不发送：本想回「${text}」`, ms: Date.now() - t0 };
+    }
+
     const result = await d.sendReply(text);
 
     if (!result.ok) {
@@ -195,6 +233,12 @@ export class AutoChat {
       const frame = await this.#d.device.adb.screencap();
       const guess = detectPage(decode(frame.png), await this.#d.device.adb.focus());
       if (guess.page === "list") return true;
+      if (guess.page === "other" || guess.page === "unknown") {
+        // 桌面/别的应用/系统弹窗：back 没用，直接拉起微信
+        await this.#d.device.adb.shell("am start -n com.tencent.mm/.ui.LauncherUI", 15000);
+        await new Promise((r) => setTimeout(r, 800));
+        continue;
+      }
       await this.#d.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
       await new Promise((r) => setTimeout(r, 400));
     }
@@ -202,7 +246,23 @@ export class AutoChat {
   }
 
   async #backToList(): Promise<void> {
-    await this.#d.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
-    await new Promise((r) => setTimeout(r, 400));
+    const frame = await this.#d.device.adb.screencap();
+    const guess = detectPage(decode(frame.png), await this.#d.device.adb.focus());
+    if (guess.page === "chat") {
+      await this.#d.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  /** 轮询直到页面变成目标页（点击后界面切换需要时间，不能只等画面静止）。 */
+  async #waitPage(target: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const frame = await this.#d.device.adb.screencap();
+      const guess = detectPage(decode(frame.png), await this.#d.device.adb.focus());
+      if (guess.page === target) return true;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return false;
   }
 }

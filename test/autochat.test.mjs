@@ -138,16 +138,20 @@ const GRAPH = {
     chat: {
       elements: {
         header: { x: 0, y: 0.03, w: 1, h: 0.05 },
+        title_strip: { x: 0.25, y: 0.03, w: 0.5, h: 0.05 },
         message_area: { x: 0, y: 0.08, w: 1, h: 0.86 },
       },
     },
   },
 };
 
-function makeOcr() {
+function makeOcr(opts = {}) {
   return {
-    async recognize(png) {
-      const lines = png === LIST_PNG ? LIST_LINES : CHAT_LINES;
+    async recognize(png, region) {
+      let lines;
+      if (png === LIST_PNG) lines = opts.list ?? LIST_LINES;
+      else if (region && region.y < 100) lines = opts.header ?? [{ text: "张三", x: 400, y: 80, w: 100, h: 40 }];
+      else lines = opts.chat ?? CHAT_LINES;
       return { lines, text: lines.map((l) => l.text).join("\n"), ms: 5 };
     },
   };
@@ -260,4 +264,61 @@ test("自动聊天：没有未读就空转，不动作", async () => {
   assert.equal(result.acted, false);
   assert.match(result.reason, /没有未读/);
   assert.equal(sentCount, 0);
+});
+test("自动聊天：进错会话就退出，不回", async () => {
+  const { device } = makeDevice();
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  let sent = 0;
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr({ header: [{ text: "李四", x: 400, y: 80, w: 100, h: 40 }] }),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "不该发：{last}" }),
+    config: { policy: { quietHours: null, whitelist: [] } },
+    sendReply: async () => {
+      sent++;
+      return { ok: true };
+    },
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.replied, undefined);
+  assert.match(result.reason, /进错会话/);
+  assert.equal(sent, 0);
+});
+
+test("自动聊天：群聊没 @ 我 → 读完但不回", async () => {
+  const { device } = makeDevice();
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  let sent = 0;
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr({
+      list: [{ text: "家庭群", x: 200, y: 240, w: 160, h: 40 }],
+      header: [{ text: "家庭群(5)", x: 400, y: 80, w: 180, h: 40 }],
+      chat: [
+        { text: "今天谁做饭", x: 150, y: 260, w: 300, h: 40 },
+        { text: "又是点外卖吧", x: 150, y: 500, w: 300, h: 40 },
+      ],
+    }),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "不该发" }),
+    config: { policy: { quietHours: null, whitelist: [] } },
+    sendReply: async () => {
+      sent++;
+      return { ok: true };
+    },
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.chat, "家庭群");
+  assert.match(result.reason, /群里没 @ 我/, result.reason);
+  assert.equal(sent, 0);
+  assert.equal(world.chat("家庭群").kind, "group");
 });

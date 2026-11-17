@@ -103,9 +103,11 @@ export function findRedBadges(bmp: Bitmap, area: Rect, opts: ScanOptions = {}): 
       const w = maxX - minX + 1;
       const h = maxY - minY + 1;
       if (w < minSize || h < minSize || w > maxSize || h > maxSize) continue;
-      // 长条形的多半是二维码/图片里的红色，不是未读标记
-      if (w > h * 2.2 || h > w * 2.2) continue;
-      if (count < 40) continue;
+      // 未读标记在头像右上角：限制在头像列，且近似方形（预览里的红字 [有人@我] 会被这两条挡掉）
+      const cx = (minX + maxX) / 2;
+      if (cx < bmp.width * 0.08 || cx > bmp.width * 0.22) continue;
+      if (w / h < 0.6 || w / h > 1.7) continue;
+      if (count < 250) continue;
       badges.push({ x: minX, y: minY, w, h, area: count });
     }
   }
@@ -135,10 +137,11 @@ export function matchNames(lines: OcrLine[], rows: UnreadRow[], rowTolerance = 6
   for (const row of rows) {
     const nearby = lines.filter((l) => Math.abs(l.y + l.h / 2 - row.y) <= rowTolerance);
     if (nearby.length === 0) continue;
-    // 名字通常是这一行最上面、字最大（高最大）的一条
-    nearby.sort((a, b) => a.y - b.y || b.h - a.h);
-    const nameLine = nearby[0]!;
-    const name = cleanName(nameLine.text);
+    const candidates = nearby.filter((l) => isNameLine(l));
+    if (candidates.length === 0) continue;
+    // 会话名通常字最大；同样大小时取最靠上的一条
+    candidates.sort((a, b) => b.h - a.h || a.y - b.y);
+    const name = cleanName(candidates[0]!.text);
     if (!name) continue;
     out.push({ y: row.y, name, unread: 1 });
   }
@@ -146,9 +149,24 @@ export function matchNames(lines: OcrLine[], rows: UnreadRow[], rowTolerance = 6
 }
 
 /** 名字里去掉未读数字、括号里的计数等噪声。 */
-export function cleanName(text: string): string {
+/** 这一行像不像会话名：不是纯数字/时间、不是预览（带冒号或方括号开头）、不是系统提示。 */
+export function isNameLine(line: OcrLine): boolean {
+  const t = line.text.trim();
+  if (t.length === 0) return false;
+  if (/^\d+$/.test(t)) return false;
+  if (/^\d{1,2}[:：]\d{2}/.test(t)) return false;
+  if (/^(上午|下午|凌晨|晚上|中午|昨天|今天)/.test(t)) return false;
+  if (/^[\[（(【]/.test(t)) return false;
+  if (/^\d+\s*[条]/.test(t)) return false;
+  if (/[：:]/.test(t)) return false;
+  return t.length >= 2;
+}
+
+export function cleanName(text: string) {
   return text
+    .replace(/\s+/g, "")
     .replace(/\[?\d+\s*条\]?/g, "")
+    .replace(/^\d+/, "")
     .replace(/^[\[\s]+|[\]\s]+$/g, "")
     .trim();
 }
