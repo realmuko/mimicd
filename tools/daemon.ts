@@ -126,6 +126,9 @@ const skillsRunner = new SkillRunner({ device: { adb, injector, ime }, actuator,
 
 const handoffMode = fileConfig.brain?.kind === "handoff";
 const pending = handoffMode ? new PendingQueue() : undefined;
+/** 群聊「交给主模型判断」的次数上限：群里一直有人在聊时，不该每轮都叫醒一次模型 */
+const judgmentTimes = new Map<string, number[]>();
+const MAX_JUDGMENTS_PER_HOUR = 6;
 
 const brain: Brain =
   handoffMode
@@ -153,6 +156,16 @@ const autoCfg: AutoChatConfig = {
   allowLaunch: flag("launch-wechat"),
   handoff: handoffMode && pending
     ? async (ctx) => {
+        if (ctx.needsJudgment) {
+          const now = Date.now();
+          const recent = (judgmentTimes.get(ctx.chat) ?? []).filter((t) => now - t < 60 * 60 * 1000);
+          if (recent.length >= MAX_JUDGMENTS_PER_HOUR) {
+            judgmentTimes.set(ctx.chat, recent);
+            return "";
+          }
+          recent.push(now);
+          judgmentTimes.set(ctx.chat, recent);
+        }
         const item = pending.add(ctx);
         return item.id;
       }

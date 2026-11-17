@@ -255,6 +255,12 @@ export class AutoChat {
 
     if (this.#cfg.handoff) {
       const id = await this.#cfg.handoff(brainCtx);
+      if (!id) {
+        // 交接方可以选择「这一轮不挂待办」（比如群聊判断已经太频繁）
+        d.eventLog?.append("note", { chat: name, skip: "handoff-capped" }, { src: "handoff" });
+        await this.#backToList();
+        return { acted: true, chat: name, replied: false, reason: "群聊判断太频繁，这一轮不挂待办", ms: Date.now() - t0 };
+      }
       d.eventLog?.append("intent.pending", { chat: name, id, reason: "交给主模型" }, { src: "handoff" });
       await this.#backToList();
       return { acted: true, chat: name, replied: false, reason: `已挂起等主模型（${id.slice(0, 8)}）`, ms: Date.now() - t0 };

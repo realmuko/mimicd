@@ -401,3 +401,33 @@ test("自动聊天：第一次点错行进了别的会话，退回来重试、�
   assert.deepEqual(sent, ["收到「出来吃饭」"]);
   assert.equal(headerCalls, 2, "第一次标题不对，重试一次才对上");
 });
+
+test("自动聊天：交接方说「这轮不挂」（返回空 id）就只记一笔，不产生待办", async () => {
+  const { device } = makeDevice();
+  const root = mkdtempSync(join(tmpdir(), "auto-cap-"));
+  const log = new EventLog({ file: join(root, "run.jsonl"), run: "r-auto-cap" });
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7), eventLog: log });
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr(),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "x" }),
+    eventLog: log,
+    config: {
+      policy: { quietHours: null, whitelist: [] },
+      rowTapX: 300,
+      handoff: async () => "",
+    },
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.acted, true, result.reason);
+  assert.equal(result.replied, false);
+  assert.match(result.reason, /太频繁/);
+  const kinds = readEvents(log.file).map((e) => e.kind);
+  assert.ok(!kinds.includes("intent.pending"), "被限流时不该产生待办");
+  assert.ok(kinds.some((k) => k === "note"), "要留一条可解释的记录");
+});
