@@ -518,7 +518,16 @@ export class SkillRunner {
         const scan = (this.#deps.graph.pages["sticker_panel"]?.grid as { scan?: unknown } | undefined)?.scan as
           | import("../perception/cells.ts").PanelGrid
           | undefined;
-        const panelOpen = scan ? findStickerCells(bmp, scan).length > 0 : !looksLikeInputBar(bmp);
+        // 两个信号都要：面板开着时输入栏被顶上去（不在底部）、且格子里有东西。
+        // 只看格子会误判 —— 会话页的消息区/贴纸也会被当成格子，按了返回就退出会话。
+        const inputBar = looksLikeInputBar(bmp);
+        const cellCount = scan ? findStickerCells(bmp, scan).length : -1;
+        const panelOpen = !inputBar && (scan ? cellCount > 0 : true);
+        this.#deps.eventLog?.append(
+          "note",
+          { op: "close_panel", page: page.page, inputBar, cells: cellCount, panelOpen },
+          { src: "skills.runner" },
+        );
         if (!panelOpen) return { closed: false, page: page.page };
         await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
         await new Promise((r) => setTimeout(r, 300));

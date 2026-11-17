@@ -387,7 +387,9 @@ async function sendReplyInner(
   if (kind.stickerMood !== undefined) {
     try {
       const imeDump = await adb.shell("dumpsys input_method", 20000);
-      if (/mInputShown=true/.test(imeDump)) {
+      const shown = /mInputShown=true/.test(imeDump);
+      eventLog.append("note", { stage: "ime-guard", shown, back: shown }, { src: "handoff" });
+      if (shown) {
         await adb.shell("input keyevent KEYCODE_BACK", 15000);
         await new Promise((r) => setTimeout(r, 400));
       }
