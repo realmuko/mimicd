@@ -285,3 +285,67 @@ test("runner：配了 OCR 就跑 obs.ocr，并把文本放进 outputs", async ()
   assert.equal(result.ok, true, result.reason);
   assert.equal(result.outputs.step1.text, "引擎冒烟测试");
 });
+
+test("runner：scroll_to_top 滚到「再滚也不动」就停（不刷满 times）", async () => {
+  // 每帧黑块位置不同 = 画面在动；最后一帧与前一帧相同 = 到顶了
+  const frames = [0, 1, 2, 2].map((step) => {
+    const bmp = chatScreen();
+    fill(bmp, { x: 0, y: 200 + step * 120, w: 1080, h: 80 }, [20, 20, 20]);
+    return encode(bmp);
+  });
+  let i = 0;
+  const { device, calls } = makeDevice({ screen: chatScreen() });
+  device.adb.screencap = async () => ({ png: frames[Math.min(i++, frames.length - 1)], width: 1080, height: 2160, ms: 600 });
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const runner = new SkillRunner({ device, actuator, graph: GRAPH });
+  const skill = {
+    ...SKILL,
+    pre: [],
+    steps: [{ op: "act.scroll_to_top", args: { region: "chat.message_area", times: 8 } }],
+    post: [],
+  };
+  const result = await runner.run(skill, {});
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(result.outputs.step1.toTop, 3);
+  assert.equal(calls.filter((c) => c[0] === "path").length, 3);
+});
+
+test("runner：找链接卡片先回底部，OCR 认出「标题+来源」就点标题", async () => {
+  const png = encode(chatScreen());
+  const { device, calls } = makeDevice({ screen: chatScreen() });
+  device.adb.screencap = async () => ({ png, width: 1080, height: 2160, ms: 600 });
+  let ocrCalls = 0;
+  const ocr = {
+    async recognize() {
+      ocrCalls++;
+      if (ocrCalls < 2) return { lines: [], text: "", ms: 10 };
+      return {
+        lines: [
+          { text: "你，想家了吗？", x: 198, y: 900, w: 302, h: 46 },
+          { text: "人民网", x: 253, y: 1152, w: 91, h: 29 },
+        ],
+        text: "",
+        ms: 10,
+      };
+    },
+  };
+  const actuator = new Actuator(device, { rng: createRng(3) });
+  const runner = new SkillRunner({ device, actuator, graph: GRAPH, ocr });
+  const skill = {
+    ...SKILL,
+    pre: [{ kind: "page", value: "chat" }],
+    steps: [{ op: "act.tap_link_card", args: {} }],
+    post: [],
+  };
+  const result = await runner.run(skill, {});
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(result.outputs.step1.via, "ocr");
+  assert.equal(result.outputs.step1.title, "你，想家了吗？");
+  const taps = calls.filter((c) => c[0] === "tap");
+  assert.equal(taps.length, 1);
+  // 点的是标题左侧文字区（不是右侧缩略图），且落在该行内
+  assert.ok(taps[0][1] > 198 && taps[0][1] < 400);
+  assert.ok(taps[0][2] > 900 && taps[0][2] < 946);
+  // 先向底部滑过一屏
+  assert.ok(calls.filter((c) => c[0] === "path").length >= 1);
+});

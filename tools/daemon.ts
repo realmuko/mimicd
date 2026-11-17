@@ -268,14 +268,25 @@ async function enterChat(name: string): Promise<boolean> {
 
 // 设备互斥：同一时刻只允许一个「长动作」（tick / 发送 / 读链接）碰手机
 let deviceBusy = false;
+let deviceBusySince = 0;
+let deviceBusyLabel = "";
+const BUSY_STALE_MS = 120000;
 
 async function exclusive<T>(label: string, fn: () => Promise<T>): Promise<T> {
-  if (deviceBusy) throw new Error(`设备忙（${label}）`);
+  const now = Date.now();
+  if (deviceBusy && now - deviceBusySince > BUSY_STALE_MS) {
+    console.log(`[lock] 强制释放疑似卡死的锁（${deviceBusyLabel}，${Math.round((now - deviceBusySince) / 1000)}s）`);
+    deviceBusy = false;
+  }
+  if (deviceBusy) throw new Error(`设备忙（${deviceBusyLabel} 正在跑，${Math.round((now - deviceBusySince) / 1000)}s）`);
   deviceBusy = true;
+  deviceBusySince = now;
+  deviceBusyLabel = label;
   try {
     return await fn();
   } finally {
     deviceBusy = false;
+    deviceBusyLabel = "";
   }
 }
 

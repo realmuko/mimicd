@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { findLinkCards } from "../src/perception/cards.ts";
+import { findCardTitle, findLinkCards } from "../src/perception/cards.ts";
 
 function blank(w, h, rgb) {
   const data = Buffer.alloc(w * h * 4);
@@ -67,4 +67,33 @@ test("卡片识别：多张按 y 排序", () => {
   const cards = findLinkCards(bmp, { x: 0, y: 0, w: 600, h: 800 });
   assert.equal(cards.length, 2);
   assert.ok(cards[0].rect.y < cards[1].rect.y);
+});
+
+test("OCR 定位卡片：标题 + 来源（左对齐、字更小、相隔 120–400）", () => {
+  const lines = [
+    { text: "在的", x: 787, y: 834, w: 87, h: 43 },
+    { text: "搞得定吗，搞不定重做啦。", x: 203, y: 1127, w: 528, h: 46 },
+    { text: "昨天晚上 11： 53", x: 435, y: 1427, w: 211, h: 29 },
+    { text: "你，想家了吗？", x: 198, y: 1564, w: 302, h: 46 },
+    { text: "人民网", x: 253, y: 1816, w: 91, h: 29 },
+  ];
+  const title = findCardTitle(lines);
+  assert.ok(title, "应认出卡片标题");
+  assert.equal(title.text, "你，想家了吗？");
+});
+
+test("OCR 定位卡片：普通气泡 + 时间行不算（Δx 太大）", () => {
+  const lines = [
+    { text: "搞得定吗，搞不定重做啦。", x: 203, y: 1127, w: 528, h: 46 },
+    { text: "昨天晚上 11： 53", x: 435, y: 1427, w: 211, h: 29 },
+  ];
+  assert.equal(findCardTitle(lines), null);
+});
+
+test("OCR 定位卡片：两条普通气泡不算（后缀行字太大）", () => {
+  const lines = [
+    { text: "第一句比较长的话在这里", x: 200, y: 600, w: 500, h: 44 },
+    { text: "第二句也比较长", x: 203, y: 900, w: 300, h: 44 },
+  ];
+  assert.equal(findCardTitle(lines), null);
 });

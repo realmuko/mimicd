@@ -152,3 +152,26 @@ export function findLinkCards(bmp: Bitmap, area: Rect, opts: CardOptions = {}): 
   out.sort((p, q) => p.rect.y - q.rect.y);
   return out;
 }
+/**
+ * 用 OCR 定位链接卡片：不找白色矩形，找「标题 + 来源」这对行。
+ *
+ * 实测（微信 8.0.80，1080×2160）：
+ *   标题「你，想家了吗？」 y=1564 h=46 x=198 w=302
+ *   来源「人民网」       y=1816 h=29 x=253 w=91
+ * 特征：左对齐（|Δx| ≤ 80）、标题大（h ≥ 34）、来源小（h ≤ 32）、纵向相距 120–400。
+ * 普通气泡后面跟时间行时 Δx ≈ 230，会被挡掉。
+ */
+export function findCardTitle(
+  lines: Array<{ text: string; x: number; y: number; w: number; h: number }>,
+): { text: string; x: number; y: number; w: number; h: number } | null {
+  const big = lines.filter((l) => l.h >= 34 && l.w >= 100 && l.text.trim().length >= 2);
+  const small = lines.filter((l) => l.h <= 32 && l.w >= 20 && l.w <= 400 && l.text.trim().length >= 2);
+  for (const title of big.sort((a, b) => b.y - a.y)) {
+    const source = small.find((s) => {
+      const dy = s.y - title.y;
+      return dy >= 120 && dy <= 400 && Math.abs(s.x - title.x) <= 80;
+    });
+    if (source) return title;
+  }
+  return null;
+}

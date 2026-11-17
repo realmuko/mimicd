@@ -11,14 +11,14 @@
 import type { EventLog } from "../eventlog.ts";
 import { Actuator } from "../act/actuator.ts";
 import type { DevicePorts } from "../device/types.ts";
-import { crop, decode, regionDiff, type Rect } from "../image/image.ts";
+import { crop, decode, regionDiff, type Bitmap, type Rect } from "../image/image.ts";
 import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
 import { findDarkPanel, isMenuPanel } from "../perception/panel.ts";
 import { findStickerCells, type PanelGrid } from "../perception/cells.ts";
 import { findImageBubbles } from "../perception/bubbles.ts";
 import { stickerFeatures } from "../image/image.ts";
-import { findLinkCards } from "../perception/cards.ts";
+import { findCardTitle, findLinkCards } from "../perception/cards.ts";
 import { looksLikeInputBar } from "../perception/page.ts";
 import { bindSteps } from "./registry.ts";
 import type { Assertion, Skill, Step } from "./types.ts";
@@ -210,32 +210,100 @@ export class SkillRunner {
       }
 
       case "act.tap_link_card": {
-        // 消息区里不一定有卡片：可能在上面的聊天记录里，最多往上翻 4 屏找
-        // ⚠ 必须确认在会话页：在列表页上滑会把「最近小程序」拉下来
+        // 找卡片：当前屏 → 先回到底部（链接多半是最近发的）→ 再逐步往上翻。
+        // 每一屏都先 OCR「标题 + 来源」，认不出来再退回白卡检测；两个都认不出来才滑。
+        // 滑到边缘（画面不再变）就停，避免固定翻 5 屏、也避免翻过头丢掉刚看到的内容。
         const nowPage = await this.#page();
         if (nowPage.page !== "chat") throw new SkillRunError(`不在会话页（${nowPage.page}），不敢滚动找卡片`);
+        if (!this.#deps.ocr) throw new SkillRunError("没有配置 OCR，无法定位链接卡片");
         const screen = this.#deps.graph.device.screen;
         const area = rectOf(this.#deps.graph, "chat", "message_area", screen.w, screen.h);
-        let cards = findLinkCards(decode((await this.#deps.device.adb.screencap()).png), area);
-        for (let i = 0; i < 4 && cards.length === 0; i++) {
-          await this.#deps.actuator.swipe(
-            { x: area.x + area.w / 2, y: area.y + area.h * 0.3 },
-            { x: area.x + area.w / 2, y: area.y + area.h * 0.8 },
-            260,
+        const midX = area.x + area.w / 2;
+        const toBottom = () =>
+          this.#deps.actuator.swipe({ x: midX, y: area.y + area.h * 0.82 }, { x: midX, y: area.y + area.h * 0.24 }, 260);
+        const toTop = () =>
+          this.#deps.actuator.swipe({ x: midX, y: area.y + area.h * 0.24 }, { x: midX, y: area.y + area.h * 0.82 }, 260);
+
+        type Probe = { hit: boolean; via?: "ocr" | "pixel"; title?: string; lines: number; cards: number };
+        const probe = async (phase: string, n: number): Promise<Probe> => {
+          const shot = await this.#deps.device.adb.screencap();
+          const bmp = decode(shot.png);
+          const ocr = await this.#deps.ocr!.recognize(shot.png, area);
+          const title = findCardTitle(ocr.lines);
+          const cards = findLinkCards(bmp, area);
+          this.#deps.eventLog?.append(
+            "note",
+            { op: "tap_link_card", phase, screen: n, lines: ocr.lines.length, title: title?.text ?? null, pixelCards: cards.length },
+            { src: "skills.runner" },
           );
-          await new Promise((r) => setTimeout(r, 600));
-          cards = findLinkCards(decode((await this.#deps.device.adb.screencap()).png), area);
+          if (title) {
+            const cx = title.x + Math.min(title.w, 220) / 2;
+            const cy = title.y + title.h / 2;
+            await this.#deps.actuator.tapPoint(cx, cy, 60);
+            return { hit: true, via: "ocr", title: title.text, lines: ocr.lines.length, cards: cards.length };
+          }
+          if (cards.length > 0) {
+            const card = cards[cards.length - 1]!;
+            const cx = card.rect.x + card.rect.w * 0.25;
+            const cy = card.rect.y + card.rect.h * 0.3;
+            await this.#deps.actuator.tapPoint(cx, cy, 60);
+            return { hit: true, via: "pixel", lines: ocr.lines.length, cards: cards.length };
+          }
+          return { hit: false, lines: ocr.lines.length, cards: cards.length };
+        };
+
+        // 滑一屏；返回 false 表示已经到边（画面没动）
+        const move = async (dir: "bottom" | "top", prev: Bitmap | null): Promise<{ moved: boolean; now: Bitmap }> => {
+          const now = decode((await this.#deps.device.adb.screencap()).png);
+          if (prev && regionDiff(prev, now, area, 12).ratio < 0.002) return { moved: false, now };
+          if (dir === "bottom") await toBottom();
+          else await toTop();
+          await new Promise((r) => setTimeout(r, 650));
+          return { moved: true, now };
+        };
+
+        let r = await probe("now", 0);
+        if (r.hit) return { via: r.via, title: r.title ?? null };
+
+        let prev: Bitmap | null = null;
+        for (let k = 1; k <= 3; k++) {
+          const m = await move("bottom", prev);
+          prev = m.now;
+          if (!m.moved) break;
+          r = await probe("bottom", k);
+          if (r.hit) return { via: r.via, title: r.title ?? null };
         }
-        if (cards.length === 0) throw new SkillRunError("往上翻了 4 屏也没找到链接卡片");
-        const raw = args["index"];
-        const want = typeof raw === "number" ? raw : cards.length;
-        const index = Math.min(cards.length, Math.max(1, Math.round(want)));
-        const card = cards[index - 1]!;
-        // 点左侧标题区：右侧是缩略图，点它可能进大图/视频
-        const cx = card.rect.x + card.rect.w * 0.25;
-        const cy = card.rect.y + card.rect.h * 0.3;
-        await this.#deps.actuator.tapPoint(cx, cy, 60);
-        return { cards: cards.length, index, rect: card.rect };
+        for (let k = 1; k <= 6; k++) {
+          const m = await move("top", prev);
+          prev = m.now;
+          if (!m.moved) break;
+          r = await probe("top", k);
+          if (r.hit) return { via: r.via, title: r.title ?? null };
+        }
+        throw new SkillRunError("把这段聊天从头翻到尾也没找到链接卡片（OCR 与像素都没认出来）");
+      }
+
+      case "act.scroll_to_top": {
+        // 语义：把这块区域滚回顶部，滚到「再滚也不动」为止（不是固定几次）
+        const region = this.#optionalRect(step, args["region"] as string | undefined, "chat.message_area");
+        const max = clampInt(args["times"], 6, 1, 12);
+        const midX = region.x + region.w / 2;
+        let prev: Bitmap | null = null;
+        let swipes = 0;
+        for (let k = 0; k < max; k++) {
+          const now = decode((await this.#deps.device.adb.screencap()).png);
+          if (prev && regionDiff(prev, now, region, 12).ratio < 0.002) break;
+          prev = now;
+          await this.#deps.actuator.swipe(
+            { x: midX, y: region.y + region.h * 0.22 },
+            { x: midX, y: region.y + region.h * 0.82 },
+            240,
+          );
+          swipes++;
+          await new Promise((r) => setTimeout(r, 450));
+        }
+        this.#deps.eventLog?.append("note", { op: "scroll_to_top", region, swipes }, { src: "skills.runner" });
+        return { toTop: swipes };
       }
 
       case "wait.text_stable": {
@@ -598,4 +666,11 @@ function round4(n: number): number {
 
 function truncate(s: string): string {
   return s.length > 60 ? s.slice(0, 60) + "…" : s;
+}
+
+/** 参数是脏的（undefined/NaN/字符串）也不能让循环失控。 */
+function clampInt(raw: unknown, fallback: number, min: number, max: number): number {
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
 }
