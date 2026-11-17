@@ -16,7 +16,7 @@
     { "op": "act.collect_sticker", "args": { "funnyThreshold": "$funnyThreshold" } }
   ],
   "post": [{ "kind": "page", "value": "chat", "message": "收藏后没回到会话页" }],
-  "budget": { "maxSteps": 3, "maxMs": 20000 },
+  "budget": { "maxSteps": 3, "maxMs": 30000 },
   "idempotency": "safe",
   "dryRun": "supported"
 }

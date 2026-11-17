@@ -364,6 +364,8 @@ export class SkillRunner {
         type Cand = { cell: StickerCell; entry: import("../stickers/library.ts").StickerEntry };
         const scanNow = async (): Promise<Cand[]> => {
           const bmp = decode((await this.#deps.device.adb.screencap()).png);
+          // 面板没打开时输入栏还在底部（面板打开会把它顶上去）——这时滑屏只会滑聊天记录
+          if (looksLikeInputBar(bmp)) throw new SkillRunError("表情面板没打开（键盘还开着/按钮没点中）");
           const used = new Set<string>();
           const out: Cand[] = [];
           for (const cell of findStickerCells(bmp, scan)) {
@@ -509,12 +511,17 @@ export class SkillRunner {
       case "act.close_panel": {
         const shot = await this.#deps.device.adb.screencap();
         const bmp = decode(shot.png);
-        // 只在「会话页且输入栏被顶上去」时才 back；在列表页按 back 会退出微信
         const page = detectPage(bmp, await this.#deps.device.adb.focus());
-        // 列表页绝不 back（会退微信）；面板开着时页面会是 unknown，这时 back 是安全的
         if (page.page === "list") return { closed: false, page: page.page };
-        if (looksLikeInputBar(bmp)) return { closed: false };
+        // 用「面板格子还在不在」判断面板开没开：输入栏的白盒判据在动画中间会误判，
+        // 一旦误判按了 back 就直接退出会话（真机踩过）。
+        const scan = (this.#deps.graph.pages["sticker_panel"]?.grid as { scan?: unknown } | undefined)?.scan as
+          | import("../perception/cells.ts").PanelGrid
+          | undefined;
+        const panelOpen = scan ? findStickerCells(bmp, scan).length > 0 : !looksLikeInputBar(bmp);
+        if (!panelOpen) return { closed: false, page: page.page };
         await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+        await new Promise((r) => setTimeout(r, 300));
         return { closed: true };
       }
 

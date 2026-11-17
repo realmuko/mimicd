@@ -220,6 +220,11 @@ let lastCollectPass = 0;
 const COLLECT_EVERY_MS = (fileConfig.autochat?.collectEveryMin ?? 10) * 60_000;
 
 async function collectPass(): Promise<void> {
+  // 手机锁屏/在别的 App 上时不巡检：既收不到，也可能在锁屏上乱点
+  const frame = await adb.screencap();
+  const focus = await adb.focus();
+  const page = detectPage(decodeFrame(frame), focus);
+  if (page.page !== "list") return;
   const wl = autoCfg.policy.whitelist ?? [];
   const chats = Object.values(world.snapshot().chats ?? {}) as Array<{ name: string; lastSeenAt: number }>;
   const pool = chats.filter((c) => wl.length === 0 || wl.includes(c.name));
@@ -233,6 +238,8 @@ async function collectPass(): Promise<void> {
   const collected = Boolean((result.outputs["step1"] as { collected?: boolean } | undefined)?.collected);
   eventLog.append("note", { stage: "collect-pass", chat, collected, reason: result.reason ?? null }, { src: "proactive" });
 }
+
+let offlineStrikes = 0;
 
 const auto = new AutoChat({
   device: { adb, injector, ime },
@@ -349,7 +356,7 @@ async function exclusive<T>(label: string, fn: () => Promise<T>, waitMs = 0): Pr
 type ReplyKind = { text?: string; stickerMood?: string };
 
 async function sendReply(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
-  return exclusive("send", () => sendReplyInner(chat, kind), 45000);
+  return exclusive("send", () => sendReplyInner(chat, kind), 90000);
 }
 
 async function sendReplyInner(
@@ -375,8 +382,18 @@ async function sendReplyInner(
     textSent = true;
   }
 
-  // 发表情不走输入法，也不需要切 IME
+  // 发表情不走输入法，也不需要切 IME；但发完文字键盘还开着，
+  // 表情按钮/面板的位置会被顶上去 —— 先收键盘（真机踩过：面板没打开，扫的是聊天区）
   if (kind.stickerMood !== undefined) {
+    try {
+      const imeDump = await adb.shell("dumpsys input_method", 20000);
+      if (/mInputShown=true/.test(imeDump)) {
+        await adb.shell("input keyevent KEYCODE_BACK", 15000);
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    } catch {
+      // 收不掉就算了，后面的面板检查会兜底
+    }
     const skill = registry.get("wechat.send_sticker_mood");
     if (!skill) return { ok: textSent, reason: textSent ? "文字已发，但没有 send_sticker_mood 技能" : "没有 send_sticker_mood 技能", textSent };
     const result = await skillsRunner.run(skill, { mood: kind.stickerMood });
@@ -542,10 +559,19 @@ async function loop(): Promise<void> {
       return;
     }
     const result = await exclusive("tick", () => auto.tick());
+    if (offlineStrikes > 0) {
+      console.log(`[tick] 设备恢复（掉线 ${offlineStrikes} 轮后）`);
+      offlineStrikes = 0;
+    }
     state.lastTick = { at: Date.now(), acted: result.acted, reason: result.reason, replied: result.replied, chat: result.chat };
     world.save(); // 每轮落盘：强杀进程时也不至于丢光会话状态
     // 没有白名单未读 → 顺手做一次收藏巡检（不然红点被读掉后永远收不到新表情）
-    if (!result.acted && /没有未读|未读都不在白名单/.test(result.reason) && Date.now() - lastCollectPass > COLLECT_EVERY_MS) {
+    if (
+      !result.acted &&
+      /没有未读|未读都不在白名单/.test(result.reason) &&
+      (pending?.size ?? 0) === 0 && // 有待办在等主模型时别抢设备
+      Date.now() - lastCollectPass > COLLECT_EVERY_MS
+    ) {
       lastCollectPass = Date.now();
       try {
         await exclusive("collect-pass", collectPass);
@@ -555,9 +581,19 @@ async function loop(): Promise<void> {
     }
     console.log(`[tick] ${new Date().toISOString()} acted=${result.acted} replied=${result.replied ?? false} chat=${result.chat ?? "-"} ${result.reason} (${result.ms}ms)`);
   } catch (err) {
-    console.log(`[tick] 出错：${(err as Error).message}`);
+    const message = (err as Error).message;
+    const offline = /no devices|offline|device .*not found/i.test(message);
+    if (offline) {
+      offlineStrikes++;
+      if (offlineStrikes === 1) console.log(`[tick] 设备掉线（第 1 次）：${message.slice(0, 120)} —— 开始每 60s 试一次重连`);
+      if (offlineStrikes % 3 === 1) {
+        await adb.exec(["reconnect", "offline"]).catch(() => {});
+      }
+    } else {
+      console.log(`[tick] 出错：${message}`);
+    }
   }
-  if (!stopping) timer = setTimeout(loop, intervalSec * 1000);
+  if (!stopping) timer = setTimeout(loop, (offlineStrikes > 0 ? 60 : intervalSec) * 1000);
 }
 
 const shutdown = async () => {
