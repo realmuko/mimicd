@@ -12,7 +12,7 @@ import { decode } from "../image/image.ts";
 import type { Ocr } from "../perception/ocr.ts";
 import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
-import { messagesFromOcr, mergeBubbles } from "../monitor/read.ts";
+import { bubbleSide, messagesFromOcr, mergeBubbles } from "../monitor/read.ts";
 import { findCardTitle } from "../perception/cards.ts";
 import { cleanName, isNameLine, scanList } from "../monitor/scan.ts";
 import { detectChatKind, titleFromOcr, titleMatches } from "../monitor/chat.ts";
@@ -209,13 +209,16 @@ export class AutoChat {
     // 对方发的链接卡片：OCR 里就是「标题 + 来源」两行，正文把来源当小字滤掉了，
     // 主模型只会看到一句莫名的话。认出卡片后把那条消息标成链接，它才知道可以点进去读。
     const card = findCardTitle(chatOcr.lines);
-    if (card) {
+    // 自己的绿色气泡里也常出现「大字 + 下面一行小字（对方昵称）」，会被误判成卡片。
+    // 真卡片是白色底：绿气泡一律不算。
+    const cardIsMine = card ? bubbleSide(chatBmp, { text: card.text, x: card.x, y: card.y, w: card.w, h: card.h }) === "me" : false;
+    if (card && !cardIsMine) {
       const near = parsed.find((m) => m.from === "other" && Math.abs(m.y - card.y) < card.h * 2.5);
       const label = `[链接] ${card.text}${card.source ? ` · ${card.source}` : ""}`;
       if (near) near.text = label;
       d.eventLog?.append(
         "note",
-        { stage: "link-card", chat: name, title: card.text, source: card.source, marked: Boolean(near) },
+        { stage: "link-card", chat: name, title: card.text, source: card.source, marked: Boolean(near), ...(cardIsMine ? { skipped: "green-bubble" } : {}) },
         { src: "monitor" },
       );
     }
@@ -254,6 +257,7 @@ export class AutoChat {
     };
 
     if (this.#cfg.handoff) {
+      await this.#maybeCollect(name, fresh.length);
       const id = await this.#cfg.handoff(brainCtx);
       if (!id) {
         // 交接方可以选择「这一轮不挂待办」（比如群聊判断已经太频繁）
@@ -334,14 +338,21 @@ export class AutoChat {
   async #ensureList(): Promise<boolean> {
     for (let i = 0; i <= this.#cfg.maxBackSteps; i++) {
       const frame = await this.#d.device.adb.screencap();
-      const guess = detectPage(decode(frame.png), await this.#d.device.adb.focus());
+      const focus = await this.#d.device.adb.focus();
+      const guess = detectPage(decode(frame.png), focus);
       if (guess.page === "list") return true;
-      if (guess.page === "other" || guess.page === "unknown") {
-        // 前台不是微信：默认不抢焦点，直接放弃这一轮（人手正在用别的东西）
+      if (guess.page === "other") {
+        // 前台是别的 App：默认不抢焦点，直接放弃这一轮（人手正在用别的东西）
         if (!this.#cfg.allowLaunch) return false;
         await this.#d.device.adb.shell("am start -n com.tencent.mm/.ui.LauncherUI", 15000);
         await new Promise((r) => setTimeout(r, 800));
         continue;
+      }
+      // unknown 多数是「浮层盖在微信上」：长按气泡的菜单、权限弹窗、表情面板。
+      // 真机上撞到过一次 —— 收藏表情中途引擎重启，菜单留在屏幕上，之后每一轮 tick
+      // 都因为「前台不是微信」原地空转，几个小时不干正事。按一次返回把它收掉。
+      if (guess.page === "unknown") {
+        this.#d.eventLog?.append("note", { stage: "ensure-list", page: "unknown", focus: focus.component, dismiss: "back" }, { src: "monitor" });
       }
       await this.#d.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
       await new Promise((r) => setTimeout(r, 400));

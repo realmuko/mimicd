@@ -431,3 +431,85 @@ test("自动聊天：交接方说「这轮不挂」（返回空 id）就只记�
   assert.ok(!kinds.includes("intent.pending"), "被限流时不该产生待办");
   assert.ok(kinds.some((k) => k === "note"), "要留一条可解释的记录");
 });
+
+test("自动聊天：屏幕上有浮层（unknown 页）盖住微信时，按返回收掉再继续", async () => {
+  const { device, state } = makeDevice();
+  const baseScreen = device.adb.screencap.bind(device.adb);
+  const baseFocus = device.adb.focus.bind(device.adb);
+  const popupPng = encode(blank(1080, 2160, [200, 200, 200]));
+  state.page = "popup";
+  device.adb.screencap = async () => {
+    if (state.page === "popup") return { png: popupPng, width: 1080, height: 2160, ms: 10 };
+    return baseScreen();
+  };
+  device.adb.focus = async () => {
+    if (state.page === "popup") return { raw: "", pkg: "", activity: "", component: "" };
+    return baseFocus();
+  };
+
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const sent = [];
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr(),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "收到「{last}」" }),
+    config: { policy: { quietHours: null, whitelist: [] }, rowTapX: 300 },
+    sendReply: async (text) => {
+      sent.push(text);
+      return { ok: true };
+    },
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.replied, true, result.reason);
+  assert.deepEqual(sent, ["收到「出来吃饭」"]);
+});
+
+test("自动聊天：绿色气泡里的「大字 + 昵称小字」不当成链接卡片", async () => {
+  const { device, state } = makeDevice();
+  const green = chatScreen();
+  fill(green, { x: 170, y: 670, w: 520, h: 100 }, [149, 236, 105]); // 自己的绿色气泡
+  const greenPng = encode(green);
+  device.adb.screencap = async () => ({
+    png: state.page === "list" ? LIST_PNG : greenPng,
+    width: 1080,
+    height: 2160,
+    ms: 10,
+  });
+
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const ocr = makeOcr({
+    chat: [
+      { text: "在吗", x: 150, y: 260, w: 120, h: 40 },
+      { text: "没死，刚缓过一口气", x: 200, y: 700, w: 520, h: 46 },
+      { text: "阿瓜", x: 253, y: 952, w: 150, h: 29 },
+    ],
+  });
+  let ctx = null;
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr,
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "x" }),
+    config: {
+      policy: { quietHours: null, whitelist: [], requireOtherSide: false },
+      rowTapX: 300,
+      handoff: async (c) => {
+        ctx = c;
+        return "pending-green";
+      },
+    },
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.acted, true, result.reason);
+  assert.ok(ctx, "应挂起给主模型");
+  assert.ok(ctx.messages.every((m) => !m.text.startsWith("[链接]")), "绿气泡不能被标成链接");
+});

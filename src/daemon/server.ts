@@ -203,12 +203,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const id = String(body["id"] ?? "");
       const text = String(body["text"] ?? "").trim();
       const stickerMood = body["stickerMood"] === undefined ? undefined : String(body["stickerMood"]);
-      const item = deps.pending.get(id);
-      if (!item || item.status !== "open") return send(404, { ok: false, error: `没有待回复项 ${id}（可能已过期）` });
-      if (!text && stickerMood === undefined) return send(400, { ok: false, error: "text 或 stickerMood 至少给一个" });
+      const item = deps.pending.claim(id);
+      if (!item) return send(404, { ok: false, error: `没有待回复项 ${id}（可能已过期）` });
+      if (!text && stickerMood === undefined) {
+        deps.pending.release(id);
+        return send(400, { ok: false, error: "text 或 stickerMood 至少给一个" });
+      }
       const result = await deps.sendReply(item.chat, stickerMood !== undefined ? { stickerMood } : { text });
-      if (!result.ok) return send(422, { ok: false, error: result.reason ?? "发送失败" });
-      deps.pending.reply(id, text || `[表情:${stickerMood}]`);
+      if (!result.ok) {
+        deps.pending.release(id);
+        return send(422, { ok: false, error: result.reason ?? "发送失败" });
+      }
+      deps.pending.finish(id, text || `[表情:${stickerMood}]`);
       deps.eventLog.append(
         "send.succeeded",
         stickerMood !== undefined ? { chat: item.chat, stickerMood, via: "handoff" } : { chat: item.chat, text, via: "handoff" },

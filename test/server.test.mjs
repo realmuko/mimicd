@@ -209,3 +209,30 @@ test("daemon：/say 主动搭话 —— 没配置时 400，被限额拒绝时 42
     await d2.close();
   }
 });
+
+test("daemon：同一条待办被两个人同时回 —— 只发一次（先占位再发送）", async () => {
+  const { PendingQueue } = await import("../src/daemon/pending.ts");
+  const queue = new PendingQueue();
+  const sent = [];
+  const { deps } = makeDeps({
+    pending: queue,
+    sendReply: async (chat, kind) => {
+      await new Promise((r) => setTimeout(r, 80));
+      sent.push(kind.text);
+      return { ok: true };
+    },
+  });
+  const item = queue.add({ chat: "阿杰", kind: "dm", messages: [{ from: "other", text: "在吗" }] });
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const [a, b] = await Promise.all([
+      post(d.port, "/pending/reply", { id: item.id, text: "收到" }),
+      post(d.port, "/pending/reply", { id: item.id, text: "收到收到" }),
+    ]);
+    const statuses = [a.status, b.status].sort();
+    assert.deepEqual(statuses, [200, 404], "一个成功一个 404，不能两个都发");
+    assert.equal(sent.length, 1);
+  } finally {
+    await d.close();
+  }
+});

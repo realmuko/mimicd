@@ -24,6 +24,7 @@ import { StickerLibrary } from "../src/stickers/library.ts";
 import { StickerLabeler } from "../src/stickers/labeler.ts";
 import { detectPage, decodeFrame, rectOf, type PageGraph } from "../src/perception/page.ts";
 import { cleanName, isNameLine } from "../src/monitor/scan.ts";
+import { detectChatKind } from "../src/monitor/chat.ts";
 import { World } from "../src/world/state.ts";
 import { AutoChat, DEFAULT_AUTOCHAT, type AutoChatConfig } from "../src/daemon/autochat.ts";
 import { startDaemonServer, type DaemonState } from "../src/daemon/server.ts";
@@ -396,7 +397,8 @@ async function say(
       reason: `距上次主动开口还不到 ${Math.round(proactiveCfg.minGapMs / 60000)} 分钟`,
     };
   }
-  if (world.chat(chat).kind === "group" && !proactiveCfg.allowGroups) {
+  const kindOf = world.chat(chat).kind === "unknown" ? detectChatKind(chat) : world.chat(chat).kind;
+  if (kindOf === "group" && !proactiveCfg.allowGroups) {
     return { ok: false, refused: "group", reason: "主动搭话默认不进群（proactive.allowGroups=false）" };
   }
 

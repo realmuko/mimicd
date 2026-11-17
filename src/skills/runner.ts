@@ -19,6 +19,7 @@ import { findStickerCells, type PanelGrid } from "../perception/cells.ts";
 import { findImageBubbles } from "../perception/bubbles.ts";
 import { stickerFeatures } from "../image/image.ts";
 import { findCardTitle, findLinkCards } from "../perception/cards.ts";
+import { bubbleSide } from "../monitor/read.ts";
 import { looksLikeInputBar } from "../perception/page.ts";
 import { bindSteps } from "./registry.ts";
 import type { Assertion, Skill, Step } from "./types.ts";
@@ -229,7 +230,9 @@ export class SkillRunner {
           const shot = await this.#deps.device.adb.screencap();
           const bmp = decode(shot.png);
           const ocr = await this.#deps.ocr!.recognize(shot.png, area);
-          const title = findCardTitle(ocr.lines);
+          const rawTitle = findCardTitle(ocr.lines);
+          // 绿色气泡里的「大字 + 下面小字」不是卡片（自己的消息常这样）
+          const title = rawTitle && bubbleSide(bmp, { text: rawTitle.text, x: rawTitle.x, y: rawTitle.y, w: rawTitle.w, h: rawTitle.h }) === "me" ? null : rawTitle;
           const cards = findLinkCards(bmp, area);
           this.#deps.eventLog?.append(
             "note",

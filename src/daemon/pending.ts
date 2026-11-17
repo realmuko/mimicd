@@ -74,10 +74,36 @@ export class PendingQueue {
     return this.#items.get(id);
   }
 
-  reply(id: string, text: string): PendingItem | null {
+  /**
+   * 先占住这条待办再发送：发送要 10–20s，这段窗口里如果又来一条同 id 的回复
+   * （插件重载会让 bridge 的去重表清空、真机上就撞到过），两边都会过「状态是不是 open」
+   * 的检查、各发一遍。占住之后第二个人直接拿不到。
+   */
+  claim(id: string): PendingItem | null {
     const item = this.#items.get(id);
     if (!item || item.status !== "open") return null;
     item.status = "replied";
+    return item;
+  }
+
+  /** 发送失败时把占位还回去，别让这条待办凭空消失。 */
+  release(id: string): void {
+    const item = this.#items.get(id);
+    if (item && item.status === "replied" && !item.reply) item.status = "open";
+  }
+
+  /** 便捷：占位 + 记内容（不同步发送；测试和不需要等发送的路径用）。 */
+  reply(id: string, text: string): PendingItem | null {
+    const item = this.claim(id);
+    if (!item) return null;
+    item.reply = text;
+    return item;
+  }
+
+  /** 发送成功后把回的内容记上（claim 已经改过状态）。 */
+  finish(id: string, text: string): PendingItem | null {
+    const item = this.#items.get(id);
+    if (!item) return null;
     item.reply = text;
     return item;
   }
