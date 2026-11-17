@@ -360,8 +360,47 @@ export class SkillRunner {
           })
           .filter((x): x is { cell: (typeof cells)[number]; entry: import("../stickers/library.ts").StickerEntry } => x !== null);
 
+        // 面板里认不出的格子：它们本来就是收藏里的贴纸，打标最多两张收进库 ——
+        // 库越小越容易「老是同一张」，这样用几次库就跟面板对上了。
+        if (this.#deps.labeler) {
+          const unknown = cells.filter((c) => !matches.some((m) => m.cell === c));
+          for (const cell of unknown.slice(0, 2)) {
+            try {
+              const piece = crop(bmp, cell.rect);
+              const feat = stickerFeatures(piece);
+              const label = await this.#deps.labeler.label(piece);
+              const entry = this.#deps.stickers.upsert({
+                dhash: feat.dhash,
+                hist: feat.hist,
+                mood: label.mood,
+                tags: label.tags ?? [],
+                funny: label.funny,
+                source: "panel",
+              });
+              entry.collectedAt = entry.collectedAt ?? Date.now();
+              this.#deps.stickers.save();
+              matches.push({ cell, entry });
+            } catch {
+              // 打标失败不影响发：这次就不学它
+            }
+          }
+        }
+        // 面板里出现的，说明确实在收藏里
+        for (const m of matches) {
+          if (!m.entry.collectedAt) {
+            m.entry.collectedAt = Date.now();
+            this.#deps.stickers.save();
+          }
+        }
+
         const pool = mood ? matches.filter((m) => m.entry.mood === mood || m.entry.tags.includes(mood)) : matches;
-        const chosen = (pool.length > 0 ? pool : matches).sort((a, b) => b.entry.funny - a.entry.funny)[0];
+        const recentlySent = (e: { sends: number[] }) => e.sends.some((t) => Date.now() - t < 30 * 60 * 1000);
+        const chosen = (pool.length > 0 ? pool : matches)
+          .slice()
+          .sort(
+            (a, b) =>
+              Number(recentlySent(a.entry)) - Number(recentlySent(b.entry)) || b.entry.funny - a.entry.funny,
+          )[0];
         if (!chosen) throw new SkillRunError(`面板里没有库里的贴纸（认出了 ${cells.length} 格，库里 ${this.#deps.stickers.size} 张）`);
 
         const cx = chosen.cell.rect.x + chosen.cell.rect.w / 2;
@@ -432,12 +471,26 @@ export class SkillRunner {
           const menuShot = await this.#deps.device.adb.screencap();
           const menuBmp = decode(menuShot.png);
           const panel = findDarkPanel(menuBmp);
-          if (!panel || !isMenuPanel(menuBmp, panel.rect)) {
+          if (!panel) {
             // 没出菜单：不要按 back（在会话页按 back 会退回列表），直接继续试上一张
             continue;
           }
-          const addPoint = panel.cell(0, 0, 5, 2);
-          await this.#deps.actuator.tapPoint(addPoint.x, addPoint.y, 60);
+          // 菜单项用 OCR 认：只有收到的贴纸才有「添加」，自己的贴纸没有。
+          // 比按网格猜坐标稳得多（实测菜单面板的 y/高度每张图都不同）。
+          if (!this.#deps.ocr) continue;
+          const menuArea = { x: panel.rect.x, y: panel.rect.y - 12, w: panel.rect.w, h: Math.min(420, panel.rect.h * 2.4) };
+          const menuOcr = await this.#deps.ocr.recognize(menuShot.png, menuArea);
+          const addLine = menuOcr.lines.find((l) => /添\s*加/.test(l.text));
+          if (!addLine) {
+            const texts = menuOcr.lines.map((l) => l.text).join(" / ").slice(0, 80);
+            this.#deps.eventLog?.append("note", { op: "collect", menu: texts, skipped: addLine ? "no-add" : "no-add-item" }, { src: "skills.runner" });
+            // 是自己的贴纸（菜单里没有添加）：点一下标题栏把菜单收掉，再试上一张
+            await this.#deps.actuator.tapPoint(540, 100, 40);
+            await new Promise((r) => setTimeout(r, 400));
+            continue;
+          }
+          await this.#deps.actuator.tapPoint(addLine.x + addLine.w / 2, addLine.y + addLine.h / 2, 60);
+          await new Promise((r) => setTimeout(r, 400));
           entry.collectedAt = Date.now();
           this.#deps.stickers.save();
           return { collected: true, mood: entry.mood, funny: entry.funny, slot: 0 };

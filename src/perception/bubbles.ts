@@ -73,6 +73,7 @@ export function findImageBubbles(bmp: Bitmap, area: Rect, opts: BubbleOptions = 
   };
 
   const out: Bubble[] = [];
+  const bins = new Int32Array(16 * 16 * 16); // 每连通块重置：4bit/通道的颜色直方图
   for (let gy = 0; gy < h; gy++) {
     for (let gx = 0; gx < w; gx++) {
       if (seen[idx(gx, gy)]) continue;
@@ -81,6 +82,8 @@ export function findImageBubbles(bmp: Bitmap, area: Rect, opts: BubbleOptions = 
       const sy = y0 + gy * step;
       if (!isContent(sx, sy)) continue;
 
+      bins.fill(0);
+      let total = 0;
       const stack: Array<[number, number]> = [[gx, gy]];
       let minX = sx;
       let maxX = sx;
@@ -104,6 +107,9 @@ export function findImageBubbles(bmp: Bitmap, area: Rect, opts: BubbleOptions = 
         const ay = y0 + cy * step;
         const [r, g, b] = px(bmp, ax, ay);
         n++;
+        total++;
+        const bi = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+        bins[bi] = (bins[bi] ?? 0) + 1;
         sumR += r;
         sumG += g;
         sumB += b;
@@ -133,6 +139,20 @@ export function findImageBubbles(bmp: Bitmap, area: Rect, opts: BubbleOptions = 
       const cw = maxX - minX + step;
       const ch = maxY - minY + step;
       if (cw < minSize || ch < minSize) continue;
+      // 满屏宽的元素多半是系统条/引用框/渐变背景，不是贴纸
+      if (cw > bmp.width * 0.85) continue;
+      if (minX <= 2 && maxX >= bmp.width - 2) continue;
+
+      // 颜色方差拦不住文字气泡：白底 + 黑字同样「方差很大」。
+      // 真正的判据是**底色占比**：文字气泡 >60% 的像素是同一种底色（白/绿），
+      // 表情/图片的颜色分散（哪怕黑白表情，灰度也散在十几个桶里）。
+      let top = 0;
+      for (let i = 0; i < bins.length; i++) {
+        const c = bins[i]!;
+        if (c > top) top = c;
+      }
+      const dominant = total === 0 ? 1 : top / total;
+      if (dominant > 0.6) continue;
       const variance = Math.max(maxR - minR, maxG - minG, maxB - minB) / 255;
       if (variance < minVariance) continue;
 
