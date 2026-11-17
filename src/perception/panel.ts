@@ -31,6 +31,30 @@ function lumaAt(bmp: Bitmap, x: number, y: number): number {
   return (bmp.data[p]! * 77 + bmp.data[p + 1]! * 150 + bmp.data[p + 2]! * 29) >> 8;
 }
 
+/**
+ * 这块深色区域到底像不像「菜单」：必须是**均匀**的深灰（图片的暗部方差大）。
+ */
+export function isMenuPanel(bmp: Bitmap, rect: Rect): boolean {
+  let n = 0;
+  let sum = 0;
+  let sumSq = 0;
+  const step = 4;
+  for (let y = rect.y + 4; y < rect.y + rect.h - 4; y += step) {
+    for (let x = rect.x + 4; x < rect.x + rect.w - 4; x += step) {
+      const p = (y * bmp.width + x) * 4;
+      const luma = (bmp.data[p]! * 77 + bmp.data[p + 1]! * 150 + bmp.data[p + 2]! * 29) >> 8;
+      sum += luma;
+      sumSq += luma * luma;
+      n++;
+    }
+  }
+  if (n < 50) return false;
+  const mean = sum / n;
+  const variance = sumSq / n - mean * mean;
+  const std = Math.sqrt(Math.max(0, variance));
+  return mean >= 30 && mean <= 110 && std <= 26;
+}
+
 export function findDarkPanel(bmp: Bitmap, opts: PanelOptions = {}): PanelHit | null {
   const maxLuma = opts.maxLuma ?? 90;
   const minRowCoverage = opts.minRowCoverage ?? 0.25;

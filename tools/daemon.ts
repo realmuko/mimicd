@@ -20,6 +20,8 @@ import { dayStamp, makeRunId } from "../src/events.ts";
 import { SkillRegistry } from "../src/skills/registry.ts";
 import { SkillRunner } from "../src/skills/runner.ts";
 import { Ocr } from "../src/perception/ocr.ts";
+import { StickerLibrary } from "../src/stickers/library.ts";
+import { StickerLabeler } from "../src/stickers/labeler.ts";
 import { detectPage, decodeFrame, type PageGraph } from "../src/perception/page.ts";
 import { World } from "../src/world/state.ts";
 import { AutoChat, DEFAULT_AUTOCHAT, type AutoChatConfig } from "../src/daemon/autochat.ts";
@@ -116,7 +118,10 @@ const ocr = new Ocr({
   scale: fileConfig.ocrScale ?? 4,
 });
 
-const skillsRunner = new SkillRunner({ device: { adb, injector, ime }, actuator, graph, eventLog, ocr });
+const stickers = new StickerLibrary(join(dataDir, "stickers", "index.json"));
+stickers.load();
+const labeler = new StickerLabeler();
+const skillsRunner = new SkillRunner({ device: { adb, injector, ime }, actuator, graph, eventLog, ocr, stickers, labeler });
 
 const handoffMode = fileConfig.brain?.kind === "handoff";
 const pending = handoffMode ? new PendingQueue() : undefined;
@@ -186,6 +191,13 @@ const auto = new AutoChat({
   graph,
   world,
   brain,
+  collectSticker: async () => {
+    const skill = registry.get("wechat.collect_sticker");
+    if (!skill) return { ok: false, reason: "没有 collect_sticker 技能" };
+    const result = await skillsRunner.run(skill, { funnyThreshold: "0.7" });
+    const collected = Boolean((result.outputs["step1"] as { collected?: boolean } | undefined)?.collected);
+    return { ok: collected, reason: result.reason };
+  },
   sendReply: async (text: string) => {
     const skill = registry.get("wechat.send_text");
     if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };

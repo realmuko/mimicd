@@ -1,0 +1,22 @@
+{
+  "id": "wechat.collect_sticker",
+  "version": 1,
+  "title": "看到好玩的贴纸就收藏",
+  "page": "chat",
+  "intent": "collect_sticker",
+  "params": {
+    "funnyThreshold": {
+      "type": "string",
+      "required": false,
+      "desc": "好玩程度阈值（默认 0.7）"
+    }
+  },
+  "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
+  "steps": [
+    { "op": "act.collect_sticker", "args": { "funnyThreshold": "$funnyThreshold" } }
+  ],
+  "post": [{ "kind": "page", "value": "chat", "message": "收藏后没回到会话页" }],
+  "budget": { "maxSteps": 3, "maxMs": 20000 },
+  "idempotency": "safe",
+  "dryRun": "supported"
+}

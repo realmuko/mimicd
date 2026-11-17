@@ -14,8 +14,9 @@ import type { DevicePorts } from "../device/types.ts";
 import { crop, decode, type Rect } from "../image/image.ts";
 import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
-import { findDarkPanel } from "../perception/panel.ts";
+import { findDarkPanel, isMenuPanel } from "../perception/panel.ts";
 import { findStickerCells, type PanelGrid } from "../perception/cells.ts";
+import { findImageBubbles } from "../perception/bubbles.ts";
 import { stickerFeatures } from "../image/image.ts";
 import { findLinkCards } from "../perception/cards.ts";
 import { looksLikeInputBar } from "../perception/page.ts";
@@ -31,6 +32,8 @@ export interface RunnerDeps {
   ocr?: import("../perception/ocr.ts").Ocr;
   /** 表情库（按情绪挑图用） */
   stickers?: import("../stickers/library.ts").StickerLibrary;
+  /** 视觉打标器（自动收藏用） */
+  labeler?: import("../stickers/labeler.ts").StickerLabeler;
 }
 
 export interface RunResult {
@@ -292,6 +295,79 @@ export class SkillRunner {
         this.#deps.stickers.markSent(chosen.entry);
         this.#deps.stickers.save();
         return { mood: chosen.entry.mood, slot: chosen.cell.index, funny: chosen.entry.funny, tags: chosen.entry.tags };
+      }
+
+      case "act.collect_sticker": {
+        if (!this.#deps.stickers || !this.#deps.labeler) throw new SkillRunError("没有配置表情库/打标器");
+        const rawThreshold = Number(args["funnyThreshold"]);
+        const threshold = Number.isFinite(rawThreshold) ? rawThreshold : 0.7;
+        const shot = await this.#deps.device.adb.screencap();
+        const bmp = decode(shot.png);
+        const screen = this.#deps.graph.device.screen;
+        const area = rectOf(this.#deps.graph, "chat", "message_area", screen.w, screen.h);
+        const bubbles = findImageBubbles(bmp, area).filter((b) => b.side === "left");
+        if (bubbles.length === 0) return { collected: false, reason: "没有对方发的图片/表情" };
+
+        // 从最新的往上试：图片会长按进画廊，表情才会出菜单；最多试 3 个
+        const attempts = bubbles.slice(-4).reverse();
+        for (const bubble of attempts) {
+          const pageNow = await this.#page();
+          if (pageNow.page !== "chat") {
+            return { collected: false, reason: `脱离了会话页（${pageNow.page}），停止收藏` };
+          }
+          const piece = crop(bmp, bubble.rect);
+          const feat = stickerFeatures(piece);
+          const known = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash);
+          if (known?.collectedAt) return { collected: false, reason: `已经收藏过（${known.mood}）` };
+
+          const label = known
+            ? { mood: known.mood, tags: known.tags, funny: known.funny }
+            : await this.#deps.labeler.label(piece);
+          const entry = this.#deps.stickers.upsert({
+            dhash: feat.dhash,
+            hist: feat.hist,
+            mood: label.mood,
+            tags: label.tags ?? [],
+            funny: label.funny,
+            source: "received",
+          });
+          this.#deps.stickers.save();
+
+          if (entry.funny < threshold) continue; // 不够好玩，试上一张
+
+          await this.#deps.actuator.holdRect(bubble.rect);
+          await new Promise((r) => setTimeout(r, 700));
+          // 轮询焦点：画廊会稍晚一点拿到焦点；只有停在聊天页才可能是表情菜单
+          let inGallery = false;
+          for (let i = 0; i < 4; i++) {
+            const f = await this.#deps.device.adb.focus();
+            if (/gallery/i.test(f.component)) {
+              inGallery = true;
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 250));
+          }
+          if (inGallery) {
+            // 是图片不是表情：退回聊天，试上一张
+            await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+            await new Promise((r) => setTimeout(r, 600));
+            this.#deps.eventLog?.append("note", { op: "collect", skipped: "image-not-sticker" }, { src: "skills.runner" });
+            continue;
+          }
+          const menuShot = await this.#deps.device.adb.screencap();
+          const menuBmp = decode(menuShot.png);
+          const panel = findDarkPanel(menuBmp);
+          if (!panel || !isMenuPanel(menuBmp, panel.rect)) {
+            // 没出菜单：不要按 back（在会话页按 back 会退回列表），直接继续试上一张
+            continue;
+          }
+          const addPoint = panel.cell(0, 0, 5, 2);
+          await this.#deps.actuator.tapPoint(addPoint.x, addPoint.y, 60);
+          entry.collectedAt = Date.now();
+          this.#deps.stickers.save();
+          return { collected: true, mood: entry.mood, funny: entry.funny, slot: 0 };
+        }
+        return { collected: false, reason: "最近的图片都不是值得收藏的表情" };
       }
 
       case "act.close_panel": {

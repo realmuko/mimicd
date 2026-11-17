@@ -23,6 +23,8 @@ import { SkillRegistry } from "../src/skills/registry.ts";
 import { SkillRunner } from "../src/skills/runner.ts";
 import { detectPage, decodeFrame, type PageGraph } from "../src/perception/page.ts";
 import { Ocr } from "../src/perception/ocr.ts";
+import { StickerLibrary } from "../src/stickers/library.ts";
+import { StickerLabeler } from "../src/stickers/labeler.ts";
 
 function arg(name: string, fallback = ""): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -98,7 +100,10 @@ eventLog.append(
 );
 
 const ocr = new Ocr({ script: resolve(arg("ocr-script", "tools/ocr/ocr.ps1")), workDir: join(dataDir, "tmp"), scale: Number(arg("ocr-scale", "3")) });
-const runner = new SkillRunner({ device: { adb, injector, ime }, actuator, graph, eventLog, ocr });
+const stickers = new StickerLibrary(resolve(arg("stickers", "data/stickers/index.json")));
+stickers.load();
+const labeler = new StickerLabeler();
+const runner = new SkillRunner({ device: { adb, injector, ime }, actuator, graph, eventLog, ocr, stickers, labeler });
 const result = await runner.run(skill, resolved);
 eventLog.close();
 

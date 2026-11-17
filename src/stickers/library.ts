@@ -30,6 +30,8 @@ export interface StickerEntry {
   firstSeenAt: number;
   /** 最近发送时间，用于「别连着发同一张」 */
   sends: number[];
+  /** 收藏成功的时间（undefined = 还没收藏） */
+  collectedAt?: number;
 }
 
 export interface StickerIndex {
@@ -84,6 +86,7 @@ export class StickerLibrary {
       source: partial.source,
       firstSeenAt: partial.firstSeenAt ?? existing?.firstSeenAt ?? Date.now(),
       sends: partial.sends ?? existing?.sends ?? [],
+      collectedAt: existing?.collectedAt,
     };
     this.#entries.set(id, entry);
     return entry;

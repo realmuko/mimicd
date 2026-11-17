@@ -35,6 +35,10 @@ export interface AutoChatConfig {
   noSend?: boolean;
   /** 前台不是微信时是否把它拉到前台（默认不拉，避免打断人） */
   allowLaunch?: boolean;
+  /** 看到对方发的贴纸就自动收藏（按好玩程度筛选） */
+  collectStickers?: boolean;
+  /** 每小时最多自动收藏几张 */
+  collectPerHour?: number;
   /** 交接模式：policy 决定要回后，把上下文交给主模型，引擎不自己编话也不发 */
   handoff?: (ctx: BrainContext) => Promise<string>;
 }
@@ -64,6 +68,8 @@ export interface AutoChatDeps {
   brain: Brain;
   /** 真正把一句话发出去（daemon 里接到 send_text 技能） */
   sendReply: (text: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** 收藏对方发的贴纸（daemon 里接到 collect_sticker 技能） */
+  collectSticker?: () => Promise<{ ok: boolean; reason?: string }>;
   eventLog?: EventLog;
   config?: Partial<AutoChatConfig>;
 }
@@ -72,6 +78,7 @@ export class AutoChat {
   readonly #d: AutoChatDeps;
   readonly #cfg: AutoChatConfig;
   #busy = false;
+  #collectTimes: number[] = [];
 
   constructor(deps: AutoChatDeps) {
     this.#d = deps;
@@ -186,6 +193,7 @@ export class AutoChat {
     );
 
     if (!decision.reply) {
+      await this.#maybeCollect(name, fresh.length);
       await this.#backToList();
       return { acted: true, chat: name, replied: false, reason: decision.reason, ms: Date.now() - t0 };
     }
@@ -238,6 +246,7 @@ export class AutoChat {
     }
 
     const lastOther = [...fresh].reverse().find((m) => m.from === "other");
+    await this.#maybeCollect(name, fresh.length);
     d.world.markReplied(name, lastOther?.id, Date.now());
     d.world.patch(name, { cooldownUntil: Date.now() + this.#cfg.perChatCooldownMs });
     d.world.save();
@@ -245,6 +254,27 @@ export class AutoChat {
 
     await this.#backToList();
     return { acted: true, chat: name, replied: true, reply: text, reason: "已回复", ms: Date.now() - t0 };
+  }
+
+  /** 自动收藏：每轮最多一次，每小时有额度；失败只记事件，不打断主流程。 */
+  async #maybeCollect(chat: string, freshCount: number): Promise<void> {
+    if (!this.#cfg.collectStickers || !this.#d.collectSticker) return;
+    if (freshCount === 0) return;
+    const now = Date.now();
+    const perHour = this.#cfg.collectPerHour ?? 2;
+    this.#collectTimes = this.#collectTimes.filter((t) => now - t < 60 * 60 * 1000);
+    if (this.#collectTimes.length >= perHour) return;
+    try {
+      const result = await this.#d.collectSticker();
+      if (result.ok) {
+        this.#collectTimes.push(now);
+        this.#d.eventLog?.append("note", { stage: "collect-sticker", chat, ok: true }, { src: "stickers" });
+      } else if (result.reason) {
+        this.#d.eventLog?.append("note", { stage: "collect-sticker", chat, skipped: result.reason }, { src: "stickers" });
+      }
+    } catch (err) {
+      this.#d.eventLog?.append("note", { stage: "collect-sticker", chat, error: (err as Error).message }, { src: "stickers" });
+    }
   }
 
   /** 确保停在会话列表：不是列表就 back，最多 maxBackSteps 次。 */
