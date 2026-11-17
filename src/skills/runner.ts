@@ -512,7 +512,14 @@ export class SkillRunner {
         const shot = await this.#deps.device.adb.screencap();
         const bmp = decode(shot.png);
         const page = detectPage(bmp, await this.#deps.device.adb.focus());
-        if (page.page === "list") return { closed: false, page: page.page };
+        if (page.page === "list") {
+          this.#deps.eventLog?.append(
+            "note",
+            { op: "close_panel", page: page.page, note: "已经在列表页，不按返回" },
+            { src: "skills.runner" },
+          );
+          return { closed: false, page: page.page };
+        }
         // 用「面板格子还在不在」判断面板开没开：输入栏的白盒判据在动画中间会误判，
         // 一旦误判按了 back 就直接退出会话（真机踩过）。
         const scan = (this.#deps.graph.pages["sticker_panel"]?.grid as { scan?: unknown } | undefined)?.scan as
@@ -542,6 +549,21 @@ export class SkillRunner {
         await this.#deps.actuator.setClipboard(text);
         await this.#deps.actuator.typeText(text);
         return { pasted: text.length };
+      }
+
+      case "act.goto_list": {
+        // 面板开着先收面板，再退出会话；最多 4 次返回
+        for (let i = 0; i < 4; i++) {
+          const frame = await this.#deps.device.adb.screencap();
+          const page = detectPage(decode(frame.png), await this.#deps.device.adb.focus());
+          if (page.page === "list") return { page: "list", backs: i };
+          await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        const frame = await this.#deps.device.adb.screencap();
+        const page = detectPage(decode(frame.png), await this.#deps.device.adb.focus());
+        if (page.page !== "list") throw new SkillRunError(`回不到列表（当前 ${page.page}）`);
+        return { page: "list", backs: 4 };
       }
 
       case "act.back": {

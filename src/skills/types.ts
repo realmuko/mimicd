@@ -20,6 +20,7 @@ export const OPS = [
   "act.scroll",
   "act.scroll_to_top",
   "act.back",
+  "act.goto_list",
   "act.close_panel",
   "act.tap_link_card",
   "act.tap_sticker_slot",

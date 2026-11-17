@@ -22,9 +22,10 @@
     { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
     { "op": "act.close_panel" },
     { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
-    { "op": "check", "args": { "kind": "message_changed", "tag": "before", "threshold": 0.01 } }
+    { "op": "check", "args": { "kind": "message_changed", "tag": "before", "threshold": 0.01 } },
+    { "op": "act.goto_list" }
   ],
-  "post": [{ "kind": "page", "value": "chat" }],
+  "post": [{ "kind": "page", "value": "list", "message": "发完表情没回到列表" }],
   "budget": { "maxSteps": 12, "maxMs": 90000 },
   "idempotency": "unsafe",
   "dryRun": "supported"
