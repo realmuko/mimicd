@@ -62,6 +62,8 @@ node --test             # 149 个离线用例：事件流、技能、策略、�
 - **发表情**：模型只给情绪（开心/无语/敷衍/惊讶/亲昵/嘲讽/委屈），引擎从收藏面板挑图发（~19s）
 - **群聊 judge**：没 @ 也挂给主模型判断；实测它会跳过纯闲聊（理由落进事件流）
 - **进错会话**：点完核对标题，不对就退回列表重扫重点，最多 3 次
+- **自动收藏表情**：起本机 qwen3-vl 打标（情绪/标签/好玩程度），funny ≥ 0.7 才入库，≤2 张/小时
+- **主动搭话**：接现成的 dsh-speak-up 掷骰子，出口是 `POST /say` + 插件工具 `wechat_say`（五道限额在引擎侧）
 
 架构图与更细的链路：[`docs/architecture-v3.md`](docs/architecture-v3.md) ·
 [`docs/architecture-v3.png`](docs/architecture-v3.png)
