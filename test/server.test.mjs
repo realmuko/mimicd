@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { startDaemonServer } from "../src/daemon/server.ts";
 import { World } from "../src/world/state.ts";
-import { EventLog } from "../src/eventlog.ts";
+import { EventLog, readEvents } from "../src/eventlog.ts";
 
 function makeDeps(overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), "daemon-"));
@@ -173,5 +173,39 @@ test("daemon：交接模式 —— /pending 列出、/pending/reply 发出并出
     assert.equal(again.status, 404);
   } finally {
     await d.close();
+  }
+});
+
+test("daemon：/say 主动搭话 —— 没配置时 400，被限额拒绝时 422 并落事件", async () => {
+  const { deps } = makeDeps();
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const missing = await post(d.port, "/say", { chat: "阿杰", text: "在吗" });
+    assert.equal(missing.status, 400);
+  } finally {
+    await d.close();
+  }
+
+  const said = [];
+  const { deps: deps2, file } = makeDeps({
+    say: async (chat, kind) => {
+      said.push({ chat, kind });
+      if (chat === "某个群") return { ok: false, refused: "group", reason: "主动搭话默认不进群" };
+      return { ok: true };
+    },
+  });
+  const d2 = await startDaemonServer(deps2, { port: 0 });
+  try {
+    const ok = await post(d2.port, "/say", { chat: "阿杰", text: "好久没聊了" });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.chat, "阿杰");
+    assert.deepEqual(said[0], { chat: "阿杰", kind: { text: "好久没聊了" } });
+
+    const refused = await post(d2.port, "/say", { chat: "某个群", text: "嘿" });
+    assert.equal(refused.status, 422);
+    assert.equal(refused.body.refused, "group");
+    assert.ok(readEvents(file).some((e) => e.kind === "note" && e.data.stage === "proactive"), "拒绝也要落事件");
+  } finally {
+    await d2.close();
   }
 });

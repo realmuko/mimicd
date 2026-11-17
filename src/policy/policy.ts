@@ -55,7 +55,7 @@ export interface DecideInput {
   config?: Partial<PolicyConfig>;
 }
 
-function inQuietHours(hour: number, range: [number, number]): boolean {
+export function inQuietHours(hour: number, range: [number, number]): boolean {
   const [start, end] = range;
   if (start === end) return false;
   if (start < end) return hour >= start && hour < end;

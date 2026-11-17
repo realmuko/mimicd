@@ -38,6 +38,8 @@ export interface DaemonDeps {
   pending?: PendingQueue;
   /** 交接回复：文本或表情 */
   sendReply?: (chat: string, kind: { text?: string; stickerMood?: string }) => Promise<{ ok: boolean; reason?: string }>;
+  /** 主动搭话：dsh-speak-up 掷中后由主模型调过来，引擎负责限额与发送 */
+  say?: (chat: string, kind: { text?: string; stickerMood?: string }) => Promise<{ ok: boolean; reason?: string; refused?: string }>;
   /** 读链接（交接模式的「眼睛」） */
   readLink?: (chat: string, which?: number) => Promise<{ ok: boolean; text?: string; reason?: string }>;
   /** 允许 POST /pending/inject（只在本地测链路时打开） */
@@ -150,6 +152,22 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
 
     // 测试用：不等真消息也能验「引擎挂起 → 会话唤醒 → 主模型回话」这一整条链。
     // 只监听 127.0.0.1，且必须显式打开（默认关），不会在产线路径上被误用。
+    if (req.method === "POST" && url.pathname === "/say") {
+      if (!deps.say) return send(400, { ok: false, error: "没有配置主动搭话" });
+      const body = await readJson(req);
+      const chat = String(body["chat"] ?? "");
+      const text = String(body["text"] ?? "").trim();
+      const stickerMood = body["stickerMood"] === undefined ? undefined : String(body["stickerMood"]);
+      if (!chat) return send(400, { ok: false, error: "chat 不能为空" });
+      if (!text && stickerMood === undefined) return send(400, { ok: false, error: "text 或 stickerMood 至少给一个" });
+      const result = await deps.say(chat, stickerMood !== undefined && !text ? { stickerMood } : { text });
+      if (!result.ok) {
+        deps.eventLog.append("note", { stage: "proactive", chat, refused: result.refused ?? null, reason: result.reason ?? null }, { src: "proactive" });
+        return send(422, { ok: false, error: result.reason ?? "发不出去", refused: result.refused });
+      }
+      return send(200, { ok: true, chat, text: text || `[表情:${stickerMood}]` });
+    }
+
     if (req.method === "POST" && url.pathname === "/pending/inject") {
       if (!deps.pending) return send(400, { ok: false, error: "未开启交接模式" });
       if (!deps.allowPendingInject) return send(403, { ok: false, error: "测试注入没打开（启动时加 --allow-pending-inject）" });

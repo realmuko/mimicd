@@ -29,7 +29,7 @@ import { AutoChat, DEFAULT_AUTOCHAT, type AutoChatConfig } from "../src/daemon/a
 import { startDaemonServer, type DaemonState } from "../src/daemon/server.ts";
 import { PendingQueue } from "../src/daemon/pending.ts";
 import { HttpBrain, ScriptedBrain, type Brain } from "../src/brain/brain.ts";
-import type { PolicyConfig } from "../src/policy/policy.ts";
+import { inQuietHours, type PolicyConfig } from "../src/policy/policy.ts";
 
 function arg(name: string, fallback = ""): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -55,6 +55,8 @@ const skillsDir = resolve(arg("skills", "skills/wechat"));
 
 interface FileConfig {
   policy?: Partial<PolicyConfig>;
+  /** 主动搭话（dsh-speak-up 掷骰子决定，引擎这边只负责限额与发送） */
+  proactive?: { maxPerHour?: number; maxPerDay?: number; minGapMs?: number; allowGroups?: boolean };
   autochat?: Partial<AutoChatConfig>;
   brain?:
     | { kind: "scripted"; template?: string }
@@ -360,6 +362,63 @@ async function sendReplyInner(chat: string, kind: ReplyKind): Promise<{ ok: bool
   });
 }
 
+// ---- 主动搭话：谁决定开口是 dsh-speak-up 的事，这里只管「限额 + 真的发出去」 ----
+const proactiveCfg = {
+  maxPerHour: fileConfig.proactive?.maxPerHour ?? 2,
+  maxPerDay: fileConfig.proactive?.maxPerDay ?? 6,
+  minGapMs: fileConfig.proactive?.minGapMs ?? 20 * 60 * 1000,
+  allowGroups: fileConfig.proactive?.allowGroups ?? false,
+};
+const proactiveTimes: number[] = [];
+
+async function say(
+  chat: string,
+  kind: ReplyKind,
+): Promise<{ ok: boolean; reason?: string; refused?: string }> {
+  const now = Date.now();
+  const qh = autoCfg.policy.quietHours ?? null;
+  if (qh && inQuietHours(new Date(now).getHours(), qh)) {
+    return { ok: false, refused: "quiet-hours", reason: `安静时段（${qh[0]}–${qh[1]} 点）不主动开口` };
+  }
+  const recentHour = proactiveTimes.filter((t) => now - t < 3600_000).length;
+  const recentDay = proactiveTimes.filter((t) => now - t < 86400_000).length;
+  const last = proactiveTimes[proactiveTimes.length - 1] ?? 0;
+  if (recentHour >= proactiveCfg.maxPerHour) {
+    return { ok: false, refused: "hour-cap", reason: `这一小时已经主动说过 ${recentHour} 次` };
+  }
+  if (recentDay >= proactiveCfg.maxPerDay) {
+    return { ok: false, refused: "day-cap", reason: `今天已经主动说过 ${recentDay} 次` };
+  }
+  if (last && now - last < proactiveCfg.minGapMs) {
+    return {
+      ok: false,
+      refused: "gap",
+      reason: `距上次主动开口还不到 ${Math.round(proactiveCfg.minGapMs / 60000)} 分钟`,
+    };
+  }
+  if (world.chat(chat).kind === "group" && !proactiveCfg.allowGroups) {
+    return { ok: false, refused: "group", reason: "主动搭话默认不进群（proactive.allowGroups=false）" };
+  }
+
+  try {
+    const result = await exclusive("say", () => sendReplyInner(chat, kind), 45000);
+    if (result.ok) {
+      proactiveTimes.push(Date.now());
+      if (proactiveTimes.length > 200) proactiveTimes.splice(0, proactiveTimes.length - 200);
+      eventLog.append(
+        "send.succeeded",
+        { chat, via: "proactive", ...(kind.text ? { text: kind.text } : { stickerMood: kind.stickerMood }) },
+        { src: "proactive" },
+      );
+    } else {
+      eventLog.append("note", { stage: "proactive", chat, error: result.reason ?? "发送失败" }, { src: "proactive" });
+    }
+    return result;
+  } catch (err) {
+    return { ok: false, reason: (err as Error).message };
+  }
+}
+
 /** 读链接：进会话 → 先试微信自带 AI 摘要 → 不行再读正文 → 回到会话 */
 async function readLink(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string; via?: string }> {
   return exclusive("read-link", () => readLinkInner(chat, which), 30000);
@@ -409,7 +468,7 @@ async function readLinkInner(chat: string, which?: number): Promise<{ ok: boolea
 }
 
 const daemon = await startDaemonServer(
-  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, allowPendingInject: flag("allow-pending-inject"), exclusive, token: fileConfig.token },
+  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, say, allowPendingInject: flag("allow-pending-inject"), exclusive, token: fileConfig.token },
   { port },
 );
 
