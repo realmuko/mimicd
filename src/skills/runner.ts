@@ -11,11 +11,12 @@
 import type { EventLog } from "../eventlog.ts";
 import { Actuator } from "../act/actuator.ts";
 import type { DevicePorts } from "../device/types.ts";
-import { decode, type Rect } from "../image/image.ts";
+import { crop, decode, type Rect } from "../image/image.ts";
 import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
 import { findDarkPanel } from "../perception/panel.ts";
 import { findStickerCells, type PanelGrid } from "../perception/cells.ts";
+import { stickerFeatures } from "../image/image.ts";
 import { findLinkCards } from "../perception/cards.ts";
 import { looksLikeInputBar } from "../perception/page.ts";
 import { bindSteps } from "./registry.ts";
@@ -28,6 +29,8 @@ export interface RunnerDeps {
   eventLog?: EventLog;
   /** 有 OCR 才能跑 obs.ocr 类步骤 */
   ocr?: import("../perception/ocr.ts").Ocr;
+  /** 表情库（按情绪挑图用） */
+  stickers?: import("../stickers/library.ts").StickerLibrary;
 }
 
 export interface RunResult {
@@ -255,6 +258,40 @@ export class SkillRunner {
           await new Promise((res) => setTimeout(res, intervalMs));
         }
         throw new SkillRunError(`等文字稳定超时（${timeoutMs}ms），当前 ${text.length} 字`);
+      }
+
+      case "act.tap_sticker_mood": {
+        if (!this.#deps.stickers) throw new SkillRunError("没有配置表情库（deps.stickers 为空）");
+        const mood = String(args["mood"] ?? "").trim();
+        const shot = await this.#deps.device.adb.screencap();
+        const bmp = decode(shot.png);
+        const scan = (this.#deps.graph.pages["sticker_panel"]?.grid as { scan?: unknown } | undefined)?.scan as
+          | import("../perception/cells.ts").PanelGrid
+          | undefined;
+        if (!scan) throw new SkillRunError("页面图里没有 sticker_panel.grid.scan");
+        const cells = findStickerCells(bmp, scan);
+        if (cells.length === 0) throw new SkillRunError("面板里没认出贴纸");
+
+        // 把屏幕上每一格和库里的条目对上，挑情绪匹配、最好玩的那张
+        const matches = cells
+          .map((cell) => {
+            const piece = crop(bmp, cell.rect);
+            const feat = stickerFeatures(piece);
+            const entry = this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash);
+            return entry ? { cell, entry } : null;
+          })
+          .filter((x): x is { cell: (typeof cells)[number]; entry: import("../stickers/library.ts").StickerEntry } => x !== null);
+
+        const pool = mood ? matches.filter((m) => m.entry.mood === mood || m.entry.tags.includes(mood)) : matches;
+        const chosen = (pool.length > 0 ? pool : matches).sort((a, b) => b.entry.funny - a.entry.funny)[0];
+        if (!chosen) throw new SkillRunError(`面板里没有库里的贴纸（认出了 ${cells.length} 格，库里 ${this.#deps.stickers.size} 张）`);
+
+        const cx = chosen.cell.rect.x + chosen.cell.rect.w / 2;
+        const cy = chosen.cell.rect.y + chosen.cell.rect.h / 2;
+        await this.#deps.actuator.tapPoint(cx, cy, 60);
+        this.#deps.stickers.markSent(chosen.entry);
+        this.#deps.stickers.save();
+        return { mood: chosen.entry.mood, slot: chosen.cell.index, funny: chosen.entry.funny, tags: chosen.entry.tags };
       }
 
       case "act.close_panel": {

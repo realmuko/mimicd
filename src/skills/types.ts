@@ -23,6 +23,7 @@ export const OPS = [
   "act.close_panel",
   "act.tap_link_card",
   "act.tap_sticker_slot",
+  "act.tap_sticker_mood",
   // 观察（会产出事件/工件）
   "obs.screenshot",
   "obs.ocr",

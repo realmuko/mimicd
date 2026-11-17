@@ -1,0 +1,29 @@
+{
+  "id": "wechat.send_sticker_mood",
+  "version": 1,
+  "title": "按情绪发一个收藏表情",
+  "page": "chat",
+  "intent": "reply_with_sticker",
+  "params": {
+    "mood": {
+      "type": "string",
+      "required": false,
+      "desc": "想要的情绪（开心/无语/敷衍/惊讶/亲昵/嘲讽/委屈）；不填就挑最好玩的"
+    }
+  },
+  "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
+  "steps": [
+    { "op": "act.tap", "target": { "page": "chat", "element": "emoji_panel_button" } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "act.tap", "target": { "page": "sticker_panel", "element": "tab_favorites" } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "act.tap_sticker_mood", "args": { "mood": "$mood" } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "act.close_panel" },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } }
+  ],
+  "post": [{ "kind": "page", "value": "chat" }],
+  "budget": { "maxSteps": 12, "maxMs": 40000 },
+  "idempotency": "unsafe",
+  "dryRun": "supported"
+}

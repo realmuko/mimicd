@@ -23,9 +23,10 @@ test("仓库里的三个微信技能全部通过校验", () => {
     "wechat.read_summary",
     "wechat.save_sticker",
     "wechat.send_sticker",
+    "wechat.send_sticker_mood",
     "wechat.send_text",
   ]);
-  assert.equal(reg.byIntent("reply_with_sticker").length, 1);
+  assert.ok(reg.byIntent("reply_with_sticker").length >= 1, "按情绪发表情与按槽位发表情都挂在 reply_with_sticker 上");
 });
 
 test("技能里出现像素坐标就被拒（坐标属于页面图）", () => {
