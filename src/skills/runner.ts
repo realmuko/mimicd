@@ -360,8 +360,13 @@ export class SkillRunner {
         for (const cell of cells) {
           const piece = crop(bmp, cell.rect);
           const feat = stickerFeatures(piece);
+          // 先按紧阈值认；认不出再按松阈值找「同一张的近似」（避免同一格每轮都新建一条 → 永远被当成没发过）
           let entry = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash);
           if (entry && used.has(entry.id)) entry = null;
+          if (!entry) {
+            const near = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash, 0.88, 30);
+            if (near && !used.has(near.id)) entry = near;
+          }
           // 认不出的格子：它们本来就是收藏里的贴纸，打标收进库（最多两张/次）——
           // 库越小越容易「老是同一张」，这样用几次库就跟面板对上了。
           if (!entry && this.#deps.labeler && learned < 2) {
@@ -395,13 +400,12 @@ export class SkillRunner {
         }
 
         const pool = mood ? matches.filter((m) => m.entry.mood === mood || m.entry.tags.includes(mood)) : matches;
-        const recentlySent = (e: { sends: number[] }) => e.sends.some((t) => Date.now() - t < 30 * 60 * 1000);
+        // 选图轮换：**上次发得最久的那张优先**（全是「最近发过」时也要轮换，否则永远挑最好玩的那张）
+        const lastSentAt = (e: { sends: number[] }) =>
+          e.sends.length > 0 ? Math.max(...e.sends) : 0;
         const chosen = (pool.length > 0 ? pool : matches)
           .slice()
-          .sort(
-            (a, b) =>
-              Number(recentlySent(a.entry)) - Number(recentlySent(b.entry)) || b.entry.funny - a.entry.funny,
-          )[0];
+          .sort((a, b) => lastSentAt(a.entry) - lastSentAt(b.entry) || b.entry.funny - a.entry.funny)[0];
         if (!chosen) throw new SkillRunError(`面板里没有库里的贴纸（认出了 ${cells.length} 格，库里 ${this.#deps.stickers.size} 张）`);
 
         const cx = chosen.cell.rect.x + chosen.cell.rect.w / 2;

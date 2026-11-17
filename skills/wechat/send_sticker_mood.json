@@ -15,13 +15,13 @@
   "steps": [
     { "op": "obs.screenshot", "args": { "tag": "before" } },
     { "op": "act.tap", "target": { "page": "chat", "element": "emoji_panel_button" } },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
     { "op": "act.tap", "target": { "page": "sticker_panel", "element": "tab_favorites" } },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
     { "op": "act.tap_sticker_mood", "args": { "mood": "$mood" } },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
     { "op": "act.close_panel" },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
     { "op": "check", "args": { "kind": "message_changed", "tag": "before", "threshold": 0.01 } }
   ],
   "post": [{ "kind": "page", "value": "chat" }],

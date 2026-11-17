@@ -15,13 +15,13 @@
   "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
   "steps": [
     { "op": "act.tap", "target": { "page": "chat", "element": "emoji_panel_button" } },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
     { "op": "act.tap", "target": { "page": "sticker_panel", "element": "tab_favorites" } },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
     { "op": "act.tap_sticker_slot", "args": { "slot": "$slot" } },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } },
     { "op": "act.close_panel" },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } }
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 8000 } }
   ],
   "post": [{ "kind": "page", "value": "chat", "message": "发完不在会话页了" }],
   "budget": { "maxSteps": 12, "maxMs": 40000 },
