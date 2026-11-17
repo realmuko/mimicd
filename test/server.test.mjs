@@ -266,3 +266,25 @@ test("daemon：/stickers 给主模型看库里有哪些情绪", async () => {
     await d2.close();
   }
 });
+
+test("daemon：回复可以同时带一句话和一个表情（先文字后表情）", async () => {
+  const { PendingQueue } = await import("../src/daemon/pending.ts");
+  const queue = new PendingQueue();
+  const kinds = [];
+  const { deps } = makeDeps({
+    pending: queue,
+    sendReply: async (chat, kind) => {
+      kinds.push(kind);
+      return { ok: true };
+    },
+  });
+  const item = queue.add({ chat: "摸鱼闲聊群", kind: "group", messages: [{ from: "other", text: "哈哈哈" }] });
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const r = await post(d.port, "/pending/reply", { id: item.id, text: "笑死", stickerMood: "无语" });
+    assert.equal(r.status, 200);
+    assert.deepEqual(kinds[0], { text: "笑死", stickerMood: "无语" });
+  } finally {
+    await d.close();
+  }
+});

@@ -350,22 +350,9 @@ export class SkillRunner {
         const gridArea = rectOf(this.#deps.graph, "sticker_panel", "grid_area", screen.w, screen.h);
         const midX = gridArea.x + gridArea.w / 2;
         const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-        const gridShot = () => this.#deps.device.adb.screencap();
 
-        // 收藏变多后面板要滚动：先回顶部，再一屏一屏往下找；
-        // 候选记下「第几屏」，选中后滚回去点它（格子坐标不能跨屏复用）。
-        // 一屏推进「一排」：滚太多会跳行（真机上格子间距约 199px）
-        const stepPx = Math.round(scan.pitchY * screen.h);
-        const scroll = async (dir: "top" | "down"): Promise<boolean> => {
-          const before = decode((await gridShot()).png);
-          const y0 = Math.round(gridArea.y + gridArea.h * (dir === "down" ? 0.7 : 0.35));
-          const y1 = dir === "down" ? y0 - stepPx : y0 + stepPx;
-          await this.#deps.actuator.swipe({ x: midX, y: y0 }, { x: midX, y: y1 }, 240);
-          await sleep(500);
-          const after = decode((await gridShot()).png);
-          return regionDiff(before, after, gridArea, 10).ratio >= 0.002;
-        };
-
+        // 面板可能被记住滚动位置：先看当前屏；当前屏没候选再回顶部往下找（最多 3 屏）。
+        // 两趟全量扫描太慢（真机 80s），常见情况第一屏就有。
         const matchEntry = (piece: Bitmap) => {
           const feat = stickerFeatures(piece);
           return (
@@ -373,65 +360,61 @@ export class SkillRunner {
             this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash, 0.88, 30)
           );
         };
-
-        for (let i = 0; i < 6; i++) {
-          if (!(await scroll("top"))) break;
-        }
-
         type StickerCell = ReturnType<typeof findStickerCells>[number];
-        type Cand = { screen: number; cell: StickerCell; entry: import("../stickers/library.ts").StickerEntry };
-        const candidates: Cand[] = [];
-        for (let s = 0; s < 5; s++) {
-          const bmp = decode((await gridShot()).png);
+        type Cand = { cell: StickerCell; entry: import("../stickers/library.ts").StickerEntry };
+        const scanNow = async (): Promise<Cand[]> => {
+          const bmp = decode((await this.#deps.device.adb.screencap()).png);
           const used = new Set<string>();
+          const out: Cand[] = [];
           for (const cell of findStickerCells(bmp, scan)) {
             const entry = matchEntry(crop(bmp, cell.rect));
             if (!entry || used.has(entry.id)) continue;
             used.add(entry.id);
-            candidates.push({ screen: s, cell, entry });
+            out.push({ cell, entry });
           }
-          if (!(await scroll("down"))) break;
+          return out;
+        };
+        const pick = (list: Cand[]): Cand => {
+          const lastSentAt = (e: { sends: number[] }) => (e.sends.length > 0 ? Math.max(...e.sends) : 0);
+          const pool = mood ? list.filter((c) => c.entry.mood === mood || c.entry.tags.includes(mood)) : list;
+          return (pool.length > 0 ? pool : list)
+            .slice()
+            .sort((a, b) => lastSentAt(a.entry) - lastSentAt(b.entry) || b.entry.funny - a.entry.funny)[0]!;
+        };
+        const scroll = async (dir: "top" | "down"): Promise<void> => {
+          const y0 = Math.round(gridArea.y + gridArea.h * (dir === "down" ? 0.7 : 0.35));
+          const stepPx = Math.round(scan.pitchY * screen.h);
+          const y1 = dir === "down" ? y0 - stepPx : y0 + stepPx;
+          await this.#deps.actuator.swipe({ x: midX, y: y0 }, { x: midX, y: y1 }, 220);
+          await sleep(350);
+        };
+
+        let chosen: Cand | null = null;
+        const here = await scanNow();
+        if (here.length > 0) chosen = pick(here);
+        if (!chosen) {
+          for (let i = 0; i < 3; i++) await scroll("top");
+          for (let s = 0; s < 3 && !chosen; s++) {
+            if (s > 0) await scroll("down");
+            const list = await scanNow();
+            if (list.length > 0) chosen = pick(list);
+          }
         }
-        if (candidates.length === 0) {
+        if (!chosen) {
           throw new SkillRunError(`面板里没有库里的贴纸（库里 ${this.#deps.stickers.size} 张；收藏可能还没收进来）`);
         }
 
-        const lastSentAt = (e: { sends: number[] }) => (e.sends.length > 0 ? Math.max(...e.sends) : 0);
-        const pool = mood ? candidates.filter((c) => c.entry.mood === mood || c.entry.tags.includes(mood)) : candidates;
-        const chosen = (pool.length > 0 ? pool : candidates)
-          .slice()
-          .sort((a, b) => lastSentAt(a.entry) - lastSentAt(b.entry) || b.entry.funny - a.entry.funny)[0]!;
-
-        // 滚回它所在那一屏，重新定位同一个条目
-        for (let i = 0; i < 6; i++) {
-          if (!(await scroll("top"))) break;
-        }
-        for (let s = 0; s < chosen.screen; s++) {
-          if (!(await scroll("down"))) break;
-        }
-        const bmp = decode((await gridShot()).png);
-        const cells = findStickerCells(bmp, scan);
-        let hit = cells.find((cell) => matchEntry(crop(bmp, cell.rect))?.id === chosen.entry.id);
-        if (!hit) {
-          // 特征没对上（缩放/压缩差异）：退回「离原来那格最近」的一格
-          hit = cells
-            .slice()
-            .sort((a, b) => Math.abs(a.rect.y - chosen.cell.rect.y) - Math.abs(b.rect.y - chosen.cell.rect.y))[0];
-        }
-        if (!hit) throw new SkillRunError("滚回去之后找不到那一格了");
-
-        const cx = hit.rect.x + hit.rect.w / 2;
-        const cy = hit.rect.y + hit.rect.h / 2;
+        const cx = chosen.cell.rect.x + chosen.cell.rect.w / 2;
+        const cy = chosen.cell.rect.y + chosen.cell.rect.h / 2;
         await this.#deps.actuator.tapPoint(cx, cy, 60);
         this.#deps.stickers.markSent(chosen.entry);
         chosen.entry.collectedAt = chosen.entry.collectedAt ?? Date.now();
         this.#deps.stickers.save();
         return {
           mood: chosen.entry.mood,
-          slot: hit.index,
+          slot: chosen.cell.index,
           funny: chosen.entry.funny,
           tags: chosen.entry.tags,
-          screen: chosen.screen,
         };
       }
 

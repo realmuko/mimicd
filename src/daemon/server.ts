@@ -175,7 +175,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const stickerMood = body["stickerMood"] === undefined ? undefined : String(body["stickerMood"]);
       if (!chat) return send(400, { ok: false, error: "chat 不能为空" });
       if (!text && stickerMood === undefined) return send(400, { ok: false, error: "text 或 stickerMood 至少给一个" });
-      const result = await deps.say(chat, stickerMood !== undefined && !text ? { stickerMood } : { text });
+      const result = await deps.say(chat, {
+        ...(text ? { text } : {}),
+        ...(stickerMood !== undefined ? { stickerMood } : {}),
+      });
       if (!result.ok) {
         deps.eventLog.append("note", { stage: "proactive", chat, refused: result.refused ?? null, reason: result.reason ?? null }, { src: "proactive" });
         return send(422, { ok: false, error: result.reason ?? "发不出去", refused: result.refused });
@@ -224,7 +227,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
         deps.pending.release(id);
         return send(400, { ok: false, error: "text 或 stickerMood 至少给一个" });
       }
-      const result = await deps.sendReply(item.chat, stickerMood !== undefined ? { stickerMood } : { text });
+      const kind = {
+        ...(text ? { text } : {}),
+        ...(stickerMood !== undefined ? { stickerMood } : {}),
+      };
+      const result = await deps.sendReply(item.chat, kind);
       if (!result.ok) {
         deps.pending.release(id);
         return send(422, { ok: false, error: result.reason ?? "发送失败" });
@@ -232,7 +239,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       deps.pending.finish(id, text || `[表情:${stickerMood}]`);
       deps.eventLog.append(
         "send.succeeded",
-        stickerMood !== undefined ? { chat: item.chat, stickerMood, via: "handoff" } : { chat: item.chat, text, via: "handoff" },
+        { chat: item.chat, ...(text ? { text } : {}), ...(stickerMood !== undefined ? { stickerMood } : {}), via: "handoff" },
         { src: "handoff" },
       );
       return send(200, { ok: true, id, chat: item.chat, text: text || `[表情:${stickerMood}]` });

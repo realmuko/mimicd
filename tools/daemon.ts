@@ -352,22 +352,43 @@ async function sendReply(chat: string, kind: ReplyKind): Promise<{ ok: boolean; 
   return exclusive("send", () => sendReplyInner(chat, kind), 45000);
 }
 
-async function sendReplyInner(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
+async function sendReplyInner(
+  chat: string,
+  kind: ReplyKind,
+): Promise<{ ok: boolean; reason?: string; textSent?: boolean; stickerSent?: boolean }> {
   if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
-  // 发表情不走输入法，也不需要切 IME
-  if (kind.stickerMood !== undefined && kind.text === undefined) {
-    const skill = registry.get("wechat.send_sticker_mood");
-    if (!skill) return { ok: false, reason: "没有 send_sticker_mood 技能" };
-    const result = await skillsRunner.run(skill, { mood: kind.stickerMood });
-    return { ok: result.ok, reason: result.reason };
+
+  let textSent = false;
+  let stickerSent = false;
+  let reason: string | undefined;
+
+  // 先说话，再补一个表情（用户 2026-11-17：回复后可以带个对应情绪的表情）
+  const text = (kind.text ?? "").trim();
+  if (text) {
+    const skill = registry.get("wechat.send_text");
+    if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };
+    const result = await withAutomationIme(async () => {
+      const r = await skillsRunner.run(skill, { text });
+      return { ok: r.ok, reason: r.reason };
+    });
+    if (!result.ok) return { ok: false, reason: result.reason };
+    textSent = true;
   }
-  const skill = registry.get("wechat.send_text");
-  if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };
-  const text = kind.text ?? "";
-  return withAutomationIme(async () => {
-    const result = await skillsRunner.run(skill, { text });
-    return { ok: result.ok, reason: result.reason };
-  });
+
+  // 发表情不走输入法，也不需要切 IME
+  if (kind.stickerMood !== undefined) {
+    const skill = registry.get("wechat.send_sticker_mood");
+    if (!skill) return { ok: textSent, reason: textSent ? "文字已发，但没有 send_sticker_mood 技能" : "没有 send_sticker_mood 技能", textSent };
+    const result = await skillsRunner.run(skill, { mood: kind.stickerMood });
+    if (!result.ok) {
+      reason = textSent ? `文字已发，表情没发出去：${result.reason ?? "未知原因"}` : result.reason;
+      return { ok: false, reason, textSent, stickerSent };
+    }
+    stickerSent = true;
+  }
+
+  if (!textSent && !stickerSent) return { ok: false, reason: "text 和 stickerMood 都是空的" };
+  return { ok: true, textSent, stickerSent };
 }
 
 // ---- 主动搭话：谁决定开口是 dsh-speak-up 的事，这里只管「限额 + 真的发出去」 ----
