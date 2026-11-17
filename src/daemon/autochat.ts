@@ -16,7 +16,7 @@ import { messagesFromOcr, mergeBubbles } from "../monitor/read.ts";
 import { cleanName, isNameLine, scanList } from "../monitor/scan.ts";
 import { detectChatKind, titleFromOcr, titleMatches } from "../monitor/chat.ts";
 import { decide, pickChat, type PolicyConfig } from "../policy/policy.ts";
-import type { Brain } from "../brain/brain.ts";
+import type { Brain, BrainContext } from "../brain/brain.ts";
 
 import type { World } from "../world/state.ts";
 import type { Actuator } from "../act/actuator.ts";
@@ -35,6 +35,8 @@ export interface AutoChatConfig {
   noSend?: boolean;
   /** 前台不是微信时是否把它拉到前台（默认不拉，避免打断人） */
   allowLaunch?: boolean;
+  /** 交接模式：policy 决定要回后，把上下文交给主模型，引擎不自己编话也不发 */
+  handoff?: (ctx: BrainContext) => Promise<string>;
 }
 
 export const DEFAULT_AUTOCHAT: AutoChatConfig = {
@@ -188,14 +190,23 @@ export class AutoChat {
       return { acted: true, chat: name, replied: false, reason: decision.reason, ms: Date.now() - t0 };
     }
 
-    // 7) 想一句
+    // 7) 想一句（交接模式下挂起，等主模型给文本）
     let replyText: string;
+    const brainCtx: BrainContext = {
+      chat: name,
+      kind: d.world.chat(name).kind,
+      messages: d.world.context(name, 12).map((m) => ({ from: m.from, text: m.text })),
+    };
+
+    if (this.#cfg.handoff) {
+      const id = await this.#cfg.handoff(brainCtx);
+      d.eventLog?.append("intent.pending", { chat: name, id, reason: "交给主模型" }, { src: "handoff" });
+      await this.#backToList();
+      return { acted: true, chat: name, replied: false, reason: `已挂起等主模型（${id.slice(0, 8)}）`, ms: Date.now() - t0 };
+    }
+
     try {
-      replyText = await d.brain.reply({
-        chat: name,
-        kind: d.world.chat(name).kind,
-        messages: d.world.context(name, 12).map((m) => ({ from: m.from, text: m.text })),
-      });
+      replyText = await d.brain.reply(brainCtx);
     } catch (err) {
       d.eventLog?.append("note", { stage: "brain", chat: name, error: (err as Error).message }, { src: "brain" });
       await this.#backToList();

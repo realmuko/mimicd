@@ -24,6 +24,7 @@ import { detectPage, decodeFrame, type PageGraph } from "../src/perception/page.
 import { World } from "../src/world/state.ts";
 import { AutoChat, DEFAULT_AUTOCHAT, type AutoChatConfig } from "../src/daemon/autochat.ts";
 import { startDaemonServer, type DaemonState } from "../src/daemon/server.ts";
+import { PendingQueue } from "../src/daemon/pending.ts";
 import { HttpBrain, ScriptedBrain, type Brain } from "../src/brain/brain.ts";
 import type { PolicyConfig } from "../src/policy/policy.ts";
 
@@ -54,7 +55,8 @@ interface FileConfig {
   autochat?: Partial<AutoChatConfig>;
   brain?:
     | { kind: "scripted"; template?: string }
-    | { kind: "http"; url: string; model: string; apiKey?: string; system?: string };
+    | { kind: "http"; url: string; model: string; apiKey?: string; system?: string }
+    | { kind: "handoff" };
   ocrScript?: string;
   ocrScale?: number;
   token?: string;
@@ -116,8 +118,13 @@ const ocr = new Ocr({
 
 const skillsRunner = new SkillRunner({ device: { adb, injector, ime }, actuator, graph, eventLog, ocr });
 
+const handoffMode = fileConfig.brain?.kind === "handoff";
+const pending = handoffMode ? new PendingQueue() : undefined;
+
 const brain: Brain =
-  fileConfig.brain?.kind === "http"
+  handoffMode
+    ? new ScriptedBrain({ template: "" })
+    : fileConfig.brain?.kind === "http"
     ? new HttpBrain({
         url: fileConfig.brain.url,
         model: fileConfig.brain.model,
@@ -138,6 +145,12 @@ const autoCfg: AutoChatConfig = {
   forceChat: arg("chat", "") || undefined,
   noSend,
   allowLaunch: flag("launch-wechat"),
+  handoff: handoffMode && pending
+    ? async (ctx) => {
+        const item = pending.add(ctx);
+        return item.id;
+      }
+    : undefined,
 };
 
 // 安全闸：真发模式下白名单为空 = 什么会话都可能回。默认拒绝启动。
@@ -221,8 +234,17 @@ const probe = async () => {
   return { focus: focus.component, page: guess.page, online: true };
 };
 
+const sendText = async (text: string): Promise<{ ok: boolean; reason?: string }> => {
+  const skill = registry.get("wechat.send_text");
+  if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };
+  return withAutomationIme(async () => {
+    const result = await skillsRunner.run(skill, { text });
+    return { ok: result.ok, reason: result.reason };
+  });
+};
+
 const daemon = await startDaemonServer(
-  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, token: fileConfig.token },
+  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendText, token: fileConfig.token },
   { port },
 );
 

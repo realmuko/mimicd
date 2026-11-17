@@ -142,3 +142,36 @@ test("daemon：token 保护 / 404 明确报错", async () => {
     await d.close();
   }
 });
+test("daemon：交接模式 —— /pending 列出、/pending/reply 发出并出队", async () => {
+  const { PendingQueue } = await import("../src/daemon/pending.ts");
+  const queue = new PendingQueue();
+  const sent = [];
+  const { deps } = makeDeps({
+    pending: queue,
+    sendText: async (text) => {
+      sent.push(text);
+      return { ok: true };
+    },
+  });
+
+  const item = queue.add({ chat: "阿杰", kind: "dm", messages: [{ from: "other", text: "在吗" }] });
+
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const list = await get(d.port, "/pending");
+    assert.equal(list.body.items.length, 1);
+    assert.equal(list.body.items[0].chat, "阿杰");
+
+    const reply = await post(d.port, "/pending/reply", { id: item.id, text: "在的" });
+    assert.equal(reply.status, 200);
+    assert.deepEqual(sent, ["在的"]);
+
+    const after = await get(d.port, "/pending");
+    assert.equal(after.body.items.length, 0);
+
+    const again = await post(d.port, "/pending/reply", { id: item.id, text: "再回" });
+    assert.equal(again.status, 404);
+  } finally {
+    await d.close();
+  }
+});
