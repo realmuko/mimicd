@@ -67,7 +67,7 @@ export interface AutoChatDeps {
   world: World;
   brain: Brain;
   /** 真正把一句话发出去（daemon 里接到 send_text 技能） */
-  sendReply: (text: string) => Promise<{ ok: boolean; reason?: string }>;
+  sendReply: (text: string, chat: string) => Promise<{ ok: boolean; reason?: string }>;
   /** 收藏对方发的贴纸（daemon 里接到 collect_sticker 技能） */
   collectSticker?: () => Promise<{ ok: boolean; reason?: string }>;
   eventLog?: EventLog;
@@ -256,7 +256,7 @@ export class AutoChat {
       return { acted: true, chat: name, replied: false, reply: text, reason: `干跑/不发送：本想回「${text}」`, ms: Date.now() - t0 };
     }
 
-    const result = await d.sendReply(text);
+    const result = await d.sendReply(text, name);
 
     if (!result.ok) {
       d.eventLog?.append("send.failed", { chat: name, text, reason: result.reason ?? null }, { src: "monitor" });

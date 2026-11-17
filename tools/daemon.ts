@@ -199,15 +199,7 @@ const auto = new AutoChat({
     const collected = Boolean((result.outputs["step1"] as { collected?: boolean } | undefined)?.collected);
     return { ok: collected, reason: result.reason };
   },
-  sendReply: async (text: string) => {
-    const skill = registry.get("wechat.send_text");
-    if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };
-    // 只在发送这几秒里把默认输入法切成自建的那个，发完立刻还给用户
-    return withAutomationIme(async () => {
-      const result = await skillsRunner.run(skill, { text });
-      return { ok: result.ok, reason: result.reason };
-    });
-  },
+  sendReply: async (text: string, chat: string) => sendReply(chat, { text }),
   eventLog,
   config: autoCfg,
 });
@@ -270,18 +262,43 @@ async function enterChat(name: string): Promise<boolean> {
   return false;
 }
 
-const sendText = async (text: string, chat: string): Promise<{ ok: boolean; reason?: string }> => {
+type ReplyKind = { text?: string; stickerMood?: string };
+
+async function sendReply(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
   if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
+  // 发表情不走输入法，也不需要切 IME
+  if (kind.stickerMood !== undefined && kind.text === undefined) {
+    const skill = registry.get("wechat.send_sticker_mood");
+    if (!skill) return { ok: false, reason: "没有 send_sticker_mood 技能" };
+    const result = await skillsRunner.run(skill, { mood: kind.stickerMood });
+    return { ok: result.ok, reason: result.reason };
+  }
   const skill = registry.get("wechat.send_text");
   if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };
+  const text = kind.text ?? "";
   return withAutomationIme(async () => {
     const result = await skillsRunner.run(skill, { text });
     return { ok: result.ok, reason: result.reason };
   });
-};
+}
+
+/** 读链接：进会话 → 跑 read_article → 把 OCR 文本拼起来 → 回到会话 */
+async function readLink(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string }> {
+  if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
+  const skill = registry.get("wechat.read_article");
+  if (!skill) return { ok: false, reason: "没有 read_article 技能" };
+  const result = await skillsRunner.run(skill, which ? { which } : {});
+  const chunks: string[] = [];
+  for (const value of Object.values(result.outputs)) {
+    const text = (value as { text?: unknown } | null)?.text;
+    if (typeof text === "string" && text.trim()) chunks.push(text.trim());
+  }
+  if (!result.ok && chunks.length === 0) return { ok: false, reason: result.reason };
+  return { ok: true, text: chunks.join("\n---\n").slice(0, 6000) };
+}
 
 const daemon = await startDaemonServer(
-  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendText, token: fileConfig.token },
+  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, token: fileConfig.token },
   { port },
 );
 

@@ -207,12 +207,20 @@ export class SkillRunner {
       }
 
       case "act.tap_link_card": {
-        const shot = await this.#deps.device.adb.screencap();
-        const bmp = decode(shot.png);
+        // 消息区里不一定有卡片：可能在上面的聊天记录里，最多往上翻 4 屏找
         const screen = this.#deps.graph.device.screen;
         const area = rectOf(this.#deps.graph, "chat", "message_area", screen.w, screen.h);
-        const cards = findLinkCards(bmp, area);
-        if (cards.length === 0) throw new SkillRunError("消息区里没找到链接卡片");
+        let cards = findLinkCards(decode((await this.#deps.device.adb.screencap()).png), area);
+        for (let i = 0; i < 4 && cards.length === 0; i++) {
+          await this.#deps.actuator.swipe(
+            { x: area.x + area.w / 2, y: area.y + area.h * 0.3 },
+            { x: area.x + area.w / 2, y: area.y + area.h * 0.8 },
+            260,
+          );
+          await new Promise((r) => setTimeout(r, 600));
+          cards = findLinkCards(decode((await this.#deps.device.adb.screencap()).png), area);
+        }
+        if (cards.length === 0) throw new SkillRunError("往上翻了 4 屏也没找到链接卡片");
         const raw = args["index"];
         const want = typeof raw === "number" ? raw : cards.length;
         const index = Math.min(cards.length, Math.max(1, Math.round(want)));
@@ -221,19 +229,6 @@ export class SkillRunner {
         const cy = card.rect.y + card.rect.h * 0.35;
         await this.#deps.actuator.tapPoint(cx, cy, 60);
         return { cards: cards.length, index, rect: card.rect };
-      }
-
-      case "act.scroll_to_top": {
-        const region = this.#optionalRect(step, args["region"] as string | undefined, "chat.message_area");
-        const times = Math.max(1, Math.min(6, Number(args["times"] ?? 3)));
-        for (let k = 0; k < times; k++) {
-          await this.#deps.actuator.swipe(
-            { x: region.x + region.w / 2, y: region.y + region.h * 0.25 },
-            { x: region.x + region.w / 2, y: region.y + region.h * 0.85 },
-            260,
-          );
-        }
-        return { toTop: times };
       }
 
       case "wait.text_stable": {
@@ -373,6 +368,10 @@ export class SkillRunner {
       case "act.close_panel": {
         const shot = await this.#deps.device.adb.screencap();
         const bmp = decode(shot.png);
+        // 只在「会话页且输入栏被顶上去」时才 back；在列表页按 back 会退出微信
+        const page = detectPage(bmp, await this.#deps.device.adb.focus());
+        // 列表页绝不 back（会退微信）；面板开着时页面会是 unknown，这时 back 是安全的
+        if (page.page === "list") return { closed: false, page: page.page };
         if (looksLikeInputBar(bmp)) return { closed: false };
         await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
         return { closed: true };

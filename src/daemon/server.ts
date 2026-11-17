@@ -36,8 +36,10 @@ export interface DaemonDeps {
   probe: () => Promise<{ focus: string; page: string; online: boolean }>;
   /** 交接模式下的待回复队列 */
   pending?: PendingQueue;
-  /** 把一句话发出去（交接模式回复用） */
-  sendText?: (text: string, chat: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** 交接回复：文本或表情 */
+  sendReply?: (chat: string, kind: { text?: string; stickerMood?: string }) => Promise<{ ok: boolean; reason?: string }>;
+  /** 读链接（交接模式的「眼睛」） */
+  readLink?: (chat: string, which?: number) => Promise<{ ok: boolean; text?: string; reason?: string }>;
   token?: string;
 }
 
@@ -143,18 +145,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
 
     if (req.method === "POST" && url.pathname === "/pending/reply") {
       if (!deps.pending) return send(400, { ok: false, error: "未开启交接模式" });
-      if (!deps.sendText) return send(400, { ok: false, error: "没有配置发送器" });
+      if (!deps.sendReply) return send(400, { ok: false, error: "没有配置发送器" });
       const body = await readJson(req);
       const id = String(body["id"] ?? "");
       const text = String(body["text"] ?? "").trim();
+      const stickerMood = body["stickerMood"] === undefined ? undefined : String(body["stickerMood"]);
       const item = deps.pending.get(id);
       if (!item || item.status !== "open") return send(404, { ok: false, error: `没有待回复项 ${id}（可能已过期）` });
-      if (!text) return send(400, { ok: false, error: "text 不能为空" });
-      const result = await deps.sendText(text, item.chat);
+      if (!text && stickerMood === undefined) return send(400, { ok: false, error: "text 或 stickerMood 至少给一个" });
+      const result = await deps.sendReply(item.chat, stickerMood !== undefined ? { stickerMood } : { text });
       if (!result.ok) return send(422, { ok: false, error: result.reason ?? "发送失败" });
-      deps.pending.reply(id, text);
-      deps.eventLog.append("send.succeeded", { chat: item.chat, text, via: "handoff" }, { src: "handoff" });
-      return send(200, { ok: true, id, chat: item.chat, text });
+      deps.pending.reply(id, text || `[表情:${stickerMood}]`);
+      deps.eventLog.append(
+        "send.succeeded",
+        stickerMood !== undefined ? { chat: item.chat, stickerMood, via: "handoff" } : { chat: item.chat, text, via: "handoff" },
+        { src: "handoff" },
+      );
+      return send(200, { ok: true, id, chat: item.chat, text: text || `[表情:${stickerMood}]` });
     }
 
     if (req.method === "POST" && url.pathname === "/pending/skip") {
@@ -162,6 +169,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const id = String(body["id"] ?? "");
       const item = deps.pending?.skip(id);
       return item ? send(200, { ok: true, id }) : send(404, { ok: false, error: "没有这个待回复项" });
+    }
+
+    if (req.method === "POST" && url.pathname === "/observe/link") {
+      if (!deps.readLink) return send(400, { ok: false, error: "没有配置读链接" });
+      const body = await readJson(req);
+      const chat = String(body["chat"] ?? "");
+      const which = body["which"] === undefined ? undefined : Number(body["which"]);
+      if (!chat) return send(400, { ok: false, error: "chat 不能为空" });
+      const result = await deps.readLink(chat, which);
+      deps.eventLog.append("note", { stage: "read-link", chat, ok: result.ok }, { src: "handoff" });
+      return send(result.ok ? 200 : 422, result);
     }
 
     if (req.method === "POST" && url.pathname === "/control") {

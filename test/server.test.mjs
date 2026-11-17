@@ -148,8 +148,8 @@ test("daemon：交接模式 —— /pending 列出、/pending/reply 发出并出
   const sent = [];
   const { deps } = makeDeps({
     pending: queue,
-    sendText: async (text) => {
-      sent.push(text);
+    sendReply: async (chat, kind) => {
+      sent.push(kind.stickerMood ?? kind.text);
       return { ok: true };
     },
   });
