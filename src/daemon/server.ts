@@ -14,6 +14,7 @@ import type { SkillRunner } from "../skills/runner.ts";
 import type { World } from "../world/state.ts";
 import type { AutoChat } from "./autochat.ts";
 import type { PendingQueue } from "./pending.ts";
+import type { StickerLibrary } from "../stickers/library.ts";
 
 export interface DaemonState {
   paused: boolean;
@@ -42,6 +43,8 @@ export interface DaemonDeps {
   say?: (chat: string, kind: { text?: string; stickerMood?: string }) => Promise<{ ok: boolean; reason?: string; refused?: string }>;
   /** 读链接（交接模式的「眼睛」） */
   readLink?: (chat: string, which?: number) => Promise<{ ok: boolean; text?: string; reason?: string }>;
+  /** 表情库（/stickers 给主模型看「现在有哪些情绪可用」） */
+  stickers?: StickerLibrary;
   /** 允许 POST /pending/inject（只在本地测链路时打开） */
   allowPendingInject?: boolean;
   /** 设备互斥：/intent 也是「碰手机」的动作，必须和 tick 排同一条队 */
@@ -119,6 +122,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? "100")));
       const all = readEvents(deps.eventFile, { afterSeq: Number.isFinite(afterSeq) ? afterSeq : 0 });
       return send(200, { ok: true, run: deps.eventLog.run, events: all.slice(-limit) });
+    }
+
+    if (req.method === "GET" && url.pathname === "/stickers") {
+      if (!deps.stickers) return send(200, { ok: true, total: 0, moods: {}, items: [] });
+      const items = deps.stickers.list().map((e) => ({
+        mood: e.mood,
+        tags: e.tags,
+        funny: e.funny,
+        collected: Boolean(e.collectedAt),
+        sends: e.sends.length,
+      }));
+      return send(200, { ok: true, total: items.length, moods: deps.stickers.moodCounts(), items });
     }
 
     if (req.method === "GET" && url.pathname === "/skills") {

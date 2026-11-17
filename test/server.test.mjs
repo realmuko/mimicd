@@ -236,3 +236,33 @@ test("daemon：同一条待办被两个人同时回 —— 只发一次（先占
     await d.close();
   }
 });
+
+test("daemon：/stickers 给主模型看库里有哪些情绪", async () => {
+  const { deps } = makeDeps();
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const empty = await get(d.port, "/stickers");
+    assert.equal(empty.status, 200);
+    assert.equal(empty.body.total, 0);
+  } finally {
+    await d.close();
+  }
+
+  const lib = {
+    list: () => [
+      { mood: "无语", tags: ["吐槽"], funny: 0.7, collectedAt: 1, sends: [] },
+      { mood: "开心", tags: [], funny: 0.8, collectedAt: 1, sends: [] },
+    ],
+    moodCounts: () => ({ 无语: 1, 开心: 1 }),
+  };
+  const { deps: deps2 } = makeDeps({ stickers: lib });
+  const d2 = await startDaemonServer(deps2, { port: 0 });
+  try {
+    const r = await get(d2.port, "/stickers");
+    assert.equal(r.body.total, 2);
+    assert.equal(r.body.moods["无语"], 1);
+    assert.equal(r.body.items.length, 2);
+  } finally {
+    await d2.close();
+  }
+});

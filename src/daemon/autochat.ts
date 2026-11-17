@@ -14,6 +14,7 @@ import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
 import { bubbleSide, messagesFromOcr, mergeBubbles } from "../monitor/read.ts";
 import { findCardTitle } from "../perception/cards.ts";
+import { findImageBubbles } from "../perception/bubbles.ts";
 import { cleanName, isNameLine, scanList } from "../monitor/scan.ts";
 import { detectChatKind, titleFromOcr, titleMatches } from "../monitor/chat.ts";
 import { decide, pickChat, type PolicyConfig } from "../policy/policy.ts";
@@ -205,6 +206,18 @@ export class AutoChat {
     const parsed = mergeBubbles(
       messagesFromOcr(chatOcr.lines, { width: screen.w, meRatio: 0.55, minHeight: 20, bmp: chatBmp }),
     );
+
+    // 图片/表情气泡没有文字，OCR 出来是空白 —— 主模型会以为对方什么都没发。
+    // 标成 [表情]，它才知道「刚才那个是个表情」，也才有可能用表情接表情。
+    for (const bubble of findImageBubbles(chatBmp, chatArea)) {
+      parsed.push({
+        text: "[表情]",
+        from: bubble.side === "left" ? "other" : "me",
+        y: bubble.rect.y,
+        h: bubble.rect.h,
+      });
+    }
+    parsed.sort((a, b) => a.y - b.y);
 
     // 对方发的链接卡片：OCR 里就是「标题 + 来源」两行，正文把来源当小字滤掉了，
     // 主模型只会看到一句莫名的话。认出卡片后把那条消息标成链接，它才知道可以点进去读。

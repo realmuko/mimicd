@@ -455,7 +455,7 @@ async function readLinkInner(chat: string, which?: number): Promise<{ ok: boolea
 }
 
 const daemon = await startDaemonServer(
-  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, say, allowPendingInject: flag("allow-pending-inject"), exclusive, token: fileConfig.token },
+  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, say, allowPendingInject: flag("allow-pending-inject"), exclusive, stickers, token: fileConfig.token },
   { port },
 );
 
