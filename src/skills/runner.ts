@@ -350,26 +350,24 @@ export class SkillRunner {
         const cells = findStickerCells(bmp, scan);
         if (cells.length === 0) throw new SkillRunError("面板里没认出贴纸");
 
-        // 把屏幕上每一格和库里的条目对上，挑情绪匹配、最好玩的那张
-        const matches = cells
-          .map((cell) => {
-            const piece = crop(bmp, cell.rect);
-            const feat = stickerFeatures(piece);
-            const entry = this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash);
-            return entry ? { cell, entry } : null;
-          })
-          .filter((x): x is { cell: (typeof cells)[number]; entry: import("../stickers/library.ts").StickerEntry } => x !== null);
+        // 把屏幕上每一格和库里的条目对上。
+        // 一格只能代表一张：同一个 entry 不许同时占两格（原来不同贴纸会被认成同一张，
+        // 于是发送统计和情绪标签都错，连发同一张也是这么来的）。
+        const matches: Array<{ cell: (typeof cells)[number]; entry: import("../stickers/library.ts").StickerEntry }> = [];
+        const used = new Set<string>();
 
-        // 面板里认不出的格子：它们本来就是收藏里的贴纸，打标最多两张收进库 ——
-        // 库越小越容易「老是同一张」，这样用几次库就跟面板对上了。
-        if (this.#deps.labeler) {
-          const unknown = cells.filter((c) => !matches.some((m) => m.cell === c));
-          for (const cell of unknown.slice(0, 2)) {
+        let learned = 0;
+        for (const cell of cells) {
+          const piece = crop(bmp, cell.rect);
+          const feat = stickerFeatures(piece);
+          let entry = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash);
+          if (entry && used.has(entry.id)) entry = null;
+          // 认不出的格子：它们本来就是收藏里的贴纸，打标收进库（最多两张/次）——
+          // 库越小越容易「老是同一张」，这样用几次库就跟面板对上了。
+          if (!entry && this.#deps.labeler && learned < 2) {
             try {
-              const piece = crop(bmp, cell.rect);
-              const feat = stickerFeatures(piece);
               const label = await this.#deps.labeler.label(piece);
-              const entry = this.#deps.stickers.upsert({
+              entry = this.#deps.stickers.upsert({
                 dhash: feat.dhash,
                 hist: feat.hist,
                 mood: label.mood,
@@ -377,13 +375,16 @@ export class SkillRunner {
                 funny: label.funny,
                 source: "panel",
               });
-              entry.collectedAt = entry.collectedAt ?? Date.now();
-              this.#deps.stickers.save();
-              matches.push({ cell, entry });
+              learned++;
             } catch {
-              // 打标失败不影响发：这次就不学它
+              entry = null;
             }
           }
+          if (!entry) continue;
+          used.add(entry.id);
+          entry.collectedAt = entry.collectedAt ?? Date.now();
+          this.#deps.stickers.save();
+          matches.push({ cell, entry });
         }
         // 面板里出现的，说明确实在收藏里
         for (const m of matches) {

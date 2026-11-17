@@ -98,7 +98,7 @@ export class StickerLibrary {
     return this.findByFeatures(feat.hist, feat.dhash);
   }
 
-  findByFeatures(hist: number[], dhash: string, threshold = 0.9): StickerEntry | null {
+  findByFeatures(hist: number[], dhash: string, threshold = 0.96): StickerEntry | null {
     let best: { entry: StickerEntry; score: number } | null = null;
     for (const entry of this.#entries.values()) {
       const score = cosine(hist, entry.hist);
@@ -106,8 +106,8 @@ export class StickerLibrary {
       if (!best || score > best.score) best = { entry, score };
     }
     if (!best) return null;
-    // 直方图打平时用 dHash 复核
-    return hamming(dhash, best.entry.dhash) <= 24 ? best.entry : null;
+    // dHash 复核：太松会把不同的贴纸认成同一张（真机上算错过发送统计和情绪）
+    return hamming(dhash, best.entry.dhash) <= 14 ? best.entry : null;
   }
 
   /**
