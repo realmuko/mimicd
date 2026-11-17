@@ -185,6 +185,19 @@ async function withAutomationIme<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+let labelerUp: boolean | null = null;
+let visionWarned = false;
+async function visionAvailable(): Promise<boolean> {
+  if (labelerUp !== null) return labelerUp;
+  try {
+    const res = await fetch("http://127.0.0.1:11434/api/tags", { signal: AbortSignal.timeout(2000) });
+    labelerUp = res.ok;
+  } catch {
+    labelerUp = false;
+  }
+  return labelerUp;
+}
+
 const auto = new AutoChat({
   device: { adb, injector, ime },
   actuator,
@@ -193,6 +206,13 @@ const auto = new AutoChat({
   world,
   brain,
   collectSticker: async () => {
+    // 收藏要先过视觉打标（判断好不好玩）。本机没起 Ollama 时直接说清楚，
+    // 不要真去长按气泡、更不要卡 60s 等模型超时 —— 那会把整轮 tick 拖死。
+    if (!(await visionAvailable())) {
+      const reason = visionWarned ? "" : "本机视觉模型没起（127.0.0.1:11434），表情先不自动收藏";
+      visionWarned = true;
+      return { ok: false, reason };
+    }
     const skill = registry.get("wechat.collect_sticker");
     if (!skill) return { ok: false, reason: "没有 collect_sticker 技能" };
     const result = await skillsRunner.run(skill, { funnyThreshold: "0.7" });
@@ -272,15 +292,28 @@ let deviceBusySince = 0;
 let deviceBusyLabel = "";
 const BUSY_STALE_MS = 120000;
 
-async function exclusive<T>(label: string, fn: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  if (deviceBusy && now - deviceBusySince > BUSY_STALE_MS) {
-    console.log(`[lock] 强制释放疑似卡死的锁（${deviceBusyLabel}，${Math.round((now - deviceBusySince) / 1000)}s）`);
-    deviceBusy = false;
+/**
+ * 设备互斥。waitMs > 0 时排队等锁（send / read-link 这类「主模型等着」的动作必须等，
+ * 不能像 tick 一样一撞到忙就放弃 —— 一放弃，模型那边就是一次静默的「没回成」）。
+ */
+async function exclusive<T>(label: string, fn: () => Promise<T>, waitMs = 0): Promise<T> {
+  const deadline = Date.now() + waitMs;
+  let waited = 0;
+  for (;;) {
+    const now = Date.now();
+    if (deviceBusy && now - deviceBusySince > BUSY_STALE_MS) {
+      console.log(`[lock] 强制释放疑似卡死的锁（${deviceBusyLabel}，${Math.round((now - deviceBusySince) / 1000)}s）`);
+      deviceBusy = false;
+    }
+    if (!deviceBusy) break;
+    if (Date.now() >= deadline) {
+      throw new Error(`设备忙（${deviceBusyLabel} 正在跑，已等 ${Math.round(waited / 1000)}s）`);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    waited = Date.now() - (deadline - waitMs);
   }
-  if (deviceBusy) throw new Error(`设备忙（${deviceBusyLabel} 正在跑，${Math.round((now - deviceBusySince) / 1000)}s）`);
   deviceBusy = true;
-  deviceBusySince = now;
+  deviceBusySince = Date.now();
   deviceBusyLabel = label;
   try {
     return await fn();
@@ -293,7 +326,7 @@ async function exclusive<T>(label: string, fn: () => Promise<T>): Promise<T> {
 type ReplyKind = { text?: string; stickerMood?: string };
 
 async function sendReply(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
-  return exclusive("send", () => sendReplyInner(chat, kind));
+  return exclusive("send", () => sendReplyInner(chat, kind), 45000);
 }
 
 async function sendReplyInner(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
@@ -316,7 +349,7 @@ async function sendReplyInner(chat: string, kind: ReplyKind): Promise<{ ok: bool
 
 /** 读链接：进会话 → 先试微信自带 AI 摘要 → 不行再读正文 → 回到会话 */
 async function readLink(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string; via?: string }> {
-  return exclusive("read-link", () => readLinkInner(chat, which));
+  return exclusive("read-link", () => readLinkInner(chat, which), 30000);
 }
 
 function collectText(outputs: Record<string, unknown>): string {

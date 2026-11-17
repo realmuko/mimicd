@@ -202,7 +202,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
     if (req.method === "POST" && url.pathname === "/pending/skip") {
       const body = await readJson(req);
       const id = String(body["id"] ?? "");
+      const reason = String(body["reason"] ?? "");
       const item = deps.pending?.skip(id);
+      if (item) deps.eventLog.append("intent.skipped", { chat: item.chat, id, reason }, { src: "handoff" });
       return item ? send(200, { ok: true, id }) : send(404, { ok: false, error: "没有这个待回复项" });
     }
 

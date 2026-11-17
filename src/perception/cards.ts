@@ -171,6 +171,9 @@ export interface CardTitle {
   h: number;
 }
 
+/** 「播放：1.2万」这类是卡片的元信息，不是标题 —— 视频卡上它常比标题还靠下。 */
+const META_LIKE = /^(播放|在看|阅读|点赞|评论|收藏|时长|热度|弹幕)\s*[：:]/;
+
 export function findCardTitle(
   lines: Array<{ text: string; x: number; y: number; w: number; h: number }>,
 ): CardTitle | null {
@@ -181,7 +184,16 @@ export function findCardTitle(
       const dy = s.y - title.y;
       return dy >= 120 && dy <= 400 && Math.abs(s.x - title.x) <= 80;
     });
-    if (source) return { text: title.text, source: source.text, x: title.x, y: title.y, w: title.w, h: title.h };
+    if (!source) continue;
+    // 选中的是元信息行时，往上看一行更大的字，那才是标题（视频卡：标题 / 播放数 / 来源）
+    let text = title.text;
+    if (META_LIKE.test(text)) {
+      const above = big
+        .filter((l) => l.y < title.y && title.y - l.y <= 280 && !META_LIKE.test(l.text))
+        .sort((a, b) => b.y - a.y)[0];
+      if (above) text = above.text;
+    }
+    return { text, source: source.text, x: title.x, y: title.y, w: title.w, h: title.h };
   }
   return null;
 }

@@ -108,3 +108,16 @@ test("OCR 定位卡片：把来源一起带回来（主模型要知道这是哪�
   assert.equal(card.text, "你，想家了吗？");
   assert.equal(card.source, "人民网");
 });
+
+test("OCR 定位卡片：视频卡的「播放：1.2万」是元信息，标题取它上面那行", () => {
+  const lines = [
+    { text: "以前我俩总在游戏厅玩", x: 203, y: 1249, w: 500, h: 46 },
+    { text: "这乐队当年是真火", x: 200, y: 1600, w: 500, h: 46 },
+    { text: "播放： 1 · 2 万", x: 200, y: 1700, w: 300, h: 46 },
+    { text: "哔哩哔哩", x: 253, y: 1900, w: 120, h: 29 },
+  ];
+  const card = findCardTitle(lines);
+  assert.ok(card);
+  assert.equal(card.text, "这乐队当年是真火");
+  assert.equal(card.source, "哔哩哔哩");
+});
