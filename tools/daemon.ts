@@ -252,19 +252,40 @@ async function enterChat(name: string): Promise<boolean> {
   const listOcr = await ocr.recognize(shot.png, area);
   const want = name.replace(/\s+/g, "");
   const line = listOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(want));
-  if (!line) return false;
+  if (!line) {
+    console.log(`[enterChat] 列表里没找到「${name}」，OCR 到: ${listOcr.lines.filter(isNameLine).map((l) => cleanName(l.text)).slice(0, 8).join(" / ")}`);
+    return false;
+  }
   await injector.tap(Math.round(graph.device.screen.w * 0.3), Math.round(line.y + line.h / 2), 70);
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 300));
     const f = await adb.screencap();
     if (detectPage(decodeFrame(f), await adb.focus()).page === "chat") return true;
   }
+  console.log(`[enterChat] 点了「${name}」但没进会话页`);
   return false;
+}
+
+// 设备互斥：同一时刻只允许一个「长动作」（tick / 发送 / 读链接）碰手机
+let deviceBusy = false;
+
+async function exclusive<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  if (deviceBusy) throw new Error(`设备忙（${label}）`);
+  deviceBusy = true;
+  try {
+    return await fn();
+  } finally {
+    deviceBusy = false;
+  }
 }
 
 type ReplyKind = { text?: string; stickerMood?: string };
 
 async function sendReply(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
+  return exclusive("send", () => sendReplyInner(chat, kind));
+}
+
+async function sendReplyInner(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
   if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
   // 发表情不走输入法，也不需要切 IME
   if (kind.stickerMood !== undefined && kind.text === undefined) {
@@ -284,6 +305,10 @@ async function sendReply(chat: string, kind: ReplyKind): Promise<{ ok: boolean; 
 
 /** 读链接：进会话 → 跑 read_article → 把 OCR 文本拼起来 → 回到会话 */
 async function readLink(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string }> {
+  return exclusive("read-link", () => readLinkInner(chat, which));
+}
+
+async function readLinkInner(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string }> {
   if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
   const skill = registry.get("wechat.read_article");
   if (!skill) return { ok: false, reason: "没有 read_article 技能" };
@@ -337,7 +362,11 @@ async function loop(): Promise<void> {
     return;
   }
   try {
-    const result = await auto.tick();
+    if (deviceBusy) {
+      timer = setTimeout(loop, intervalSec * 1000);
+      return;
+    }
+    const result = await exclusive("tick", () => auto.tick());
     state.lastTick = { at: Date.now(), acted: result.acted, reason: result.reason, replied: result.replied, chat: result.chat };
     console.log(`[tick] ${new Date().toISOString()} acted=${result.acted} replied=${result.replied ?? false} chat=${result.chat ?? "-"} ${result.reason} (${result.ms}ms)`);
   } catch (err) {

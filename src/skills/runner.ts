@@ -11,7 +11,7 @@
 import type { EventLog } from "../eventlog.ts";
 import { Actuator } from "../act/actuator.ts";
 import type { DevicePorts } from "../device/types.ts";
-import { crop, decode, type Rect } from "../image/image.ts";
+import { crop, decode, regionDiff, type Rect } from "../image/image.ts";
 import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
 import { findDarkPanel, isMenuPanel } from "../perception/panel.ts";
@@ -56,6 +56,8 @@ export class SkillRunError extends Error {
 
 export class SkillRunner {
   readonly #deps: RunnerDeps;
+  /** obs.screenshot 带 tag 的帧，供 check 对比 */
+  readonly #shots = new Map<string, import("../image/image.ts").Bitmap>();
 
   constructor(deps: RunnerDeps) {
     this.#deps = deps;
@@ -163,6 +165,7 @@ export class SkillRunner {
     switch (step.op) {
       case "obs.screenshot": {
         const shot = await this.#deps.device.adb.screencap();
+        this.#shots.set(String(args["tag"] ?? "shot"), decode(shot.png));
         const guess = await this.#page();
         this.#deps.eventLog?.append(
           "frame.captured",
@@ -208,6 +211,9 @@ export class SkillRunner {
 
       case "act.tap_link_card": {
         // 消息区里不一定有卡片：可能在上面的聊天记录里，最多往上翻 4 屏找
+        // ⚠ 必须确认在会话页：在列表页上滑会把「最近小程序」拉下来
+        const nowPage = await this.#page();
+        if (nowPage.page !== "chat") throw new SkillRunError(`不在会话页（${nowPage.page}），不敢滚动找卡片`);
         const screen = this.#deps.graph.device.screen;
         const area = rectOf(this.#deps.graph, "chat", "message_area", screen.w, screen.h);
         let cards = findLinkCards(decode((await this.#deps.device.adb.screencap()).png), area);
@@ -225,8 +231,9 @@ export class SkillRunner {
         const want = typeof raw === "number" ? raw : cards.length;
         const index = Math.min(cards.length, Math.max(1, Math.round(want)));
         const card = cards[index - 1]!;
-        const cx = card.rect.x + card.rect.w * 0.4;
-        const cy = card.rect.y + card.rect.h * 0.35;
+        // 点左侧标题区：右侧是缩略图，点它可能进大图/视频
+        const cx = card.rect.x + card.rect.w * 0.25;
+        const cy = card.rect.y + card.rect.h * 0.3;
         await this.#deps.actuator.tapPoint(cx, cy, 60);
         return { cards: cards.length, index, rect: card.rect };
       }
@@ -449,6 +456,20 @@ export class SkillRunner {
           this.#deps.eventLog?.append("action.verified", { check: kind, expect, ok: true }, { src: "skills.runner" });
           return { inputContains: true };
         }
+        if (kind === "message_changed") {
+          const tag = String(args["tag"] ?? "before");
+          const before = this.#shots.get(tag);
+          if (!before) throw new SkillRunError(`没有找到标签为 ${tag} 的截图`);
+          const threshold = Number(args["threshold"] ?? 0.01);
+          const shot = await this.#deps.device.adb.screencap();
+          const after = decode(shot.png);
+          const screen = this.#deps.graph.device.screen;
+          const area = rectOf(this.#deps.graph, "chat", "message_area", screen.w, screen.h);
+          const diff = regionDiff(before, after, area, 12);
+          if (diff.ratio < threshold) throw new SkillRunError(`消息区没有变化（${diff.ratio}），可能没发出去`);
+          return { changed: diff.ratio, bbox: diff.bbox };
+        }
+
         if (kind === "clipboard_contains") {
           const expect = String(args["value"] ?? "");
           const text = await this.#deps.actuator.readClipboard();

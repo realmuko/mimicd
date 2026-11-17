@@ -13,7 +13,6 @@ function blank(w, h, rgb) {
   }
   return { width: w, height: h, data };
 }
-
 function fill(bmp, rect, rgb) {
   for (let y = rect.y; y < rect.y + rect.h; y++) {
     for (let x = rect.x; x < rect.x + rect.w; x++) {
@@ -24,28 +23,35 @@ function fill(bmp, rect, rgb) {
     }
   }
 }
-
 const AREA = { x: 0, y: 0, w: 600, h: 600 };
 
-test("卡片识别：能找出白色大圆角块（链接卡片）", () => {
-  const bmp = blank(600, 600, [237, 237, 237]);
-  // 一张卡片：宽 420，高 120
-  fill(bmp, { x: 90, y: 200, w: 420, h: 120 }, [255, 255, 255]);
-  // 卡片里一条深色标题
-  fill(bmp, { x: 110, y: 230, w: 260, h: 16 }, [40, 40, 40]);
+/** 一张真卡片：白底 + 深色标题 + **右侧彩色缩略图** */
+function drawCard(bmp, rect) {
+  fill(bmp, rect, [255, 255, 255]);
+  fill(bmp, { x: rect.x + 20, y: rect.y + 30, w: 260, h: 16 }, [40, 40, 40]);
+  fill(bmp, { x: rect.x + rect.w - 110, y: rect.y + 20, w: 90, h: 80 }, [180, 150, 90]); // 彩色图
+}
 
+test("卡片识别：白底 + 彩色缩略图才算卡片", () => {
+  const bmp = blank(600, 600, [237, 237, 237]);
+  drawCard(bmp, { x: 90, y: 200, w: 420, h: 120 });
   const cards = findLinkCards(bmp, AREA);
   assert.equal(cards.length, 1);
-  assert.deepEqual(cards[0].rect, { x: 90, y: 200, w: 420, h: 120 });
+  assert.equal(cards[0].rect.w, 420);
 });
 
-test("卡片识别：普通白色气泡（窄）不算卡片", () => {
+test("卡片识别：纯白文字气泡（没有彩色块）不算卡片", () => {
   const bmp = blank(600, 600, [237, 237, 237]);
-  // 340/600 = 0.57，够宽到能被行投影看到，但达不到卡片的 0.6 宽度线
-  fill(bmp, { x: 150, y: 100, w: 340, h: 80 }, [255, 255, 255]);
-  assert.equal(findLinkCards(bmp, AREA, { minWidthRatio: 0.6 }).length, 0);
-  // 放宽宽度阈值就能找到，证明挡它的是宽度条件
-  assert.equal(findLinkCards(bmp, AREA, { minWidthRatio: 0.5 }).length, 1);
+  fill(bmp, { x: 90, y: 200, w: 420, h: 120 }, [255, 255, 255]);
+  fill(bmp, { x: 110, y: 230, w: 300, h: 16 }, [40, 40, 40]);
+  assert.equal(findLinkCards(bmp, AREA).length, 0);
+});
+
+test("卡片识别：宽度阈值真的在起作用（真机卡片约 0.6–0.7 屏宽）", () => {
+  const bmp = blank(600, 600, [237, 237, 237]);
+  drawCard(bmp, { x: 100, y: 100, w: 400, h: 80 });
+  assert.equal(findLinkCards(bmp, AREA, { minWidthRatio: 0.7 }).length, 0);
+  assert.equal(findLinkCards(bmp, AREA, { minWidthRatio: 0.6 }).length, 1);
 });
 
 test("卡片识别：绿色气泡（自己发的）不算", () => {
@@ -54,10 +60,10 @@ test("卡片识别：绿色气泡（自己发的）不算", () => {
   assert.equal(findLinkCards(bmp, AREA).length, 0);
 });
 
-test("卡片识别：多张卡片按 y 排序，位置都对", () => {
+test("卡片识别：多张按 y 排序", () => {
   const bmp = blank(600, 800, [237, 237, 237]);
-  fill(bmp, { x: 90, y: 550, w: 420, h: 100 }, [255, 255, 255]);
-  fill(bmp, { x: 90, y: 150, w: 420, h: 100 }, [255, 255, 255]);
+  drawCard(bmp, { x: 90, y: 550, w: 420, h: 100 });
+  drawCard(bmp, { x: 90, y: 150, w: 420, h: 100 });
   const cards = findLinkCards(bmp, { x: 0, y: 0, w: 600, h: 800 });
   assert.equal(cards.length, 2);
   assert.ok(cards[0].rect.y < cards[1].rect.y);

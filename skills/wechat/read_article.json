@@ -23,7 +23,7 @@
   "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
   "steps": [
     { "op": "act.tap_link_card", "args": { "index": "$which" } },
-    { "op": "wait.element", "args": { "what": "article.title", "timeoutMs": 8000 } },
+    { "op": "wait.element", "args": { "what": "article.title", "timeoutMs": 15000 } },
     { "op": "act.scroll_to_top", "args": { "region": "article.body", "times": 3 } },
     { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 5000 } },
     { "op": "obs.ocr", "args": { "region": "article.header", "tag": "article-header" } },

@@ -32,6 +32,26 @@ function lumaAt(bmp: Bitmap, x: number, y: number): number {
   return (bmp.data[p]! * 77 + bmp.data[p + 1]! * 150 + bmp.data[p + 2]! * 29) >> 8;
 }
 
+/** 卡片里有没有彩色块（缩略图）。文字气泡是白底黑字，没有。 */
+export function hasColorBlock(bmp: Bitmap, rect: Rect): boolean {
+  const x1 = Math.min(bmp.width, rect.x + rect.w);
+  const y1 = Math.min(bmp.height, rect.y + rect.h);
+  let colored = 0;
+  let total = 0;
+  for (let y = rect.y + 4; y < y1 - 4; y += 3) {
+    for (let x = rect.x + 4; x < x1 - 4; x += 3) {
+      const p = (y * bmp.width + x) * 4;
+      const r = bmp.data[p]!;
+      const g = bmp.data[p + 1]!;
+      const b = bmp.data[p + 2]!;
+      total++;
+      // 饱和度：三通道极差够大才算「有颜色」
+      if (Math.max(r, g, b) - Math.min(r, g, b) > 26) colored++;
+    }
+  }
+  return total > 0 && colored / total > 0.01;
+}
+
 export function findLinkCards(bmp: Bitmap, area: Rect, opts: CardOptions = {}): CardHit[] {
   const white = opts.whiteThreshold ?? 250;
   const minRowCoverage = opts.minRowCoverage ?? 0.5;
@@ -88,10 +108,19 @@ export function findLinkCards(bmp: Bitmap, area: Rect, opts: CardOptions = {}): 
     // 列带（在行带内）
     const colHit = new Float32Array(cols);
     const bandRows = Math.max(1, Math.ceil((bandY1 - bandY0) / 2));
+    // 列判据：近白 或 有颜色（右侧缩略图）。白带里出现颜色只可能是图，不会是绿气泡
+    const isCardInk = (x: number, y: number) => {
+      const p = (y * bmp.width + x) * 4;
+      const r = bmp.data[p]!;
+      const g = bmp.data[p + 1]!;
+      const b2 = bmp.data[p + 2]!;
+      if (((r * 77 + g * 150 + b2 * 29) >> 8) >= 250) return true;
+      return Math.max(r, g, b2) - Math.min(r, g, b2) > 26;
+    };
     for (let x = x0; x < x1; x++) {
       let n = 0;
       for (let y = bandY0; y < bandY1; y += 2) {
-        if (lumaAt(bmp, x, y) >= white) n++;
+        if (isCardInk(x, y)) n++;
       }
       colHit[x - x0] = n / bandRows;
     }
@@ -112,6 +141,8 @@ export function findLinkCards(bmp: Bitmap, area: Rect, opts: CardOptions = {}): 
     if (bestL < 0) continue;
     const w = bestR - bestL;
     if (w < bmp.width * minWidthRatio) continue;
+    // 卡片右侧有缩略图：要求卡片内存在一块「有颜色」的区域，纯白文字气泡会被挡掉
+    if (!hasColorBlock(bmp, { x: x0 + bestL, y: bandY0, w, h: bandY1 - bandY0 })) continue;
     out.push({
       rect: { x: x0 + bestL, y: bandY0, w, h: bandY1 - bandY0 },
       ratio: Math.round((h / rows) * 1000) / 1000,

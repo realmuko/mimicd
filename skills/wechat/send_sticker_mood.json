@@ -13,6 +13,7 @@
   },
   "pre": [{ "kind": "page", "value": "chat", "message": "必须先停在会话页" }],
   "steps": [
+    { "op": "obs.screenshot", "args": { "tag": "before" } },
     { "op": "act.tap", "target": { "page": "chat", "element": "emoji_panel_button" } },
     { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
     { "op": "act.tap", "target": { "page": "sticker_panel", "element": "tab_favorites" } },
@@ -20,7 +21,8 @@
     { "op": "act.tap_sticker_mood", "args": { "mood": "$mood" } },
     { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
     { "op": "act.close_panel" },
-    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } }
+    { "op": "wait.stable", "args": { "frames": 2, "timeoutMs": 4000 } },
+    { "op": "check", "args": { "kind": "message_changed", "tag": "before", "threshold": 0.01 } }
   ],
   "post": [{ "kind": "page", "value": "chat" }],
   "budget": { "maxSteps": 12, "maxMs": 40000 },
