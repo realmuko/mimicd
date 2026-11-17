@@ -142,10 +142,23 @@ export class AutoChat {
 
     // 4) 进去
     await d.actuator.tapPoint(this.#cfg.rowTapX, Math.round(rowY), 60);
-    const entered = await this.#waitPage("chat", 6000);
+    let entered = await this.#waitPage("chat", 6000);
+
+    // 列表随时可能在重排：点一次没进去，就重新扫一遍列表再点一次
+    for (let retry = 0; retry < 2 && !entered; retry++) {
+      await this.#ensureList();
+      const again = await d.device.adb.screencap();
+      const againOcr = await d.ocr.recognize(again.png, listArea);
+      const line = againOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(name.replace(/\s+/g, "")));
+      if (!line) break;
+      const retryY = line.y + line.h / 2;
+      await d.actuator.tapPoint(this.#cfg.rowTapX, Math.round(retryY), 60);
+      entered = await this.#waitPage("chat", 6000);
+    }
+
     if (!entered) {
       await this.#backToList();
-      return { acted: false, chat: name, reason: "点了会话行但没进到聊天页", ms: Date.now() - t0 };
+      return { acted: false, chat: name, reason: "点了会话行但没进到聊天页（重试后仍失败）", ms: Date.now() - t0 };
     }
     await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000 });
 
