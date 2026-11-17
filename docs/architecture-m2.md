@@ -73,18 +73,26 @@
 
 ## 5. HTTP 契约
 
+> v3 交接链路（待办 ↔ 主模型）看 [`architecture-v3.md`](architecture-v3.md)。
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/health` | 存活、暂停、干跑、设备页面、上一轮结果 |
 | GET | `/state` | 世界快照（会话、未读、冷却、最近消息） |
 | GET | `/events?afterSeq=&limit=` | 增量事件（回放/监控用） |
 | GET | `/skills` | 技能清单 + 校验问题 |
-| POST | `/intent` | `{skill, params}` → 执行技能（同步等结果） |
+| GET | `/pending` | 待回复队列（交接模式） |
+| POST | `/pending/reply` | `{id, text}` 或 `{id, stickerMood}` → 引擎发送（排队等设备锁） |
+| POST | `/pending/skip` | `{id, reason}` → 跳过并落 `intent.skipped` 事件 |
+| POST | `/pending/inject` | 测试用：不等真消息就能验整条链（需 `--allow-pending-inject`） |
+| POST | `/observe/link` | `{chat, which?}` → 读一条链接（AI 摘要优先，正文兜底） |
+| POST | `/intent` | `{skill, params}` → 执行技能（走同一把设备锁） |
 | POST | `/control` | `pause` / `resume` / `dry_run` / `wet` / `tick` |
 | POST | `/tick` | 立即跑一轮（调试） |
 
 只监听 `127.0.0.1`，可选 `token`（`Authorization: Bearer` 或 `?token=`）。
 `/intent` 同步返回，但**不可逆动作**（发送）在技能里是 `idempotency: unsafe`，调用方要自己防重。
+设备锁：`tick` 撞到忙就跳过；`/pending/reply` 与 `/observe/link` 会排队等锁（45s / 30s）。
 
 ## 6. 失败与降级
 
