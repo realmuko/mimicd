@@ -24,6 +24,7 @@ import { StickerLibrary } from "../src/stickers/library.ts";
 import { StickerLabeler } from "../src/stickers/labeler.ts";
 import { detectPage, decodeFrame, rectOf, type PageGraph } from "../src/perception/page.ts";
 import { cleanName, isNameLine } from "../src/monitor/scan.ts";
+import { enterChat as navigateEnterChat } from "../src/daemon/navigate.ts";
 import { detectChatKind } from "../src/monitor/chat.ts";
 import { World } from "../src/world/state.ts";
 import { AutoChat, DEFAULT_AUTOCHAT, type AutoChatConfig } from "../src/daemon/autochat.ts";
@@ -276,30 +277,14 @@ const probe = async () => {
   return { focus: focus.component, page: guess.page, online: true };
 };
 
+/** 进会话：点完必须核对标题，进错/认不出标题一律不发（见 src/daemon/navigate.ts）。 */
 async function enterChat(name: string): Promise<boolean> {
-  for (let i = 0; i < 4; i++) {
-    const f = await adb.screencap();
-    if (detectPage(decodeFrame(f), await adb.focus()).page === "list") break;
-    await adb.shell("input keyevent KEYCODE_BACK", 15000);
-    await new Promise((r) => setTimeout(r, 400));
+  const result = await navigateEnterChat({ adb, injector, ocr, graph, log: (m) => console.log(m) }, name);
+  if (!result.ok) {
+    console.log(`[enterChat] ${result.reason}`);
+    eventLog.append("note", { stage: "enter-chat", chat: name, reason: result.reason ?? null }, { src: "handoff" });
   }
-  const shot = await adb.screencap();
-  const area = rectOf(graph, "list", "list_area", graph.device.screen.w, graph.device.screen.h);
-  const listOcr = await ocr.recognize(shot.png, area);
-  const want = name.replace(/\s+/g, "");
-  const line = listOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(want));
-  if (!line) {
-    console.log(`[enterChat] 列表里没找到「${name}」，OCR 到: ${listOcr.lines.filter(isNameLine).map((l) => cleanName(l.text)).slice(0, 8).join(" / ")}`);
-    return false;
-  }
-  await injector.tap(Math.round(graph.device.screen.w * 0.3), Math.round(line.y + line.h / 2), 70);
-  for (let i = 0; i < 20; i++) {
-    await new Promise((r) => setTimeout(r, 300));
-    const f = await adb.screencap();
-    if (detectPage(decodeFrame(f), await adb.focus()).page === "chat") return true;
-  }
-  console.log(`[enterChat] 点了「${name}」但没进会话页`);
-  return false;
+  return result.ok;
 }
 
 // 设备互斥：同一时刻只允许一个「长动作」（tick / 发送 / 读链接）碰手机
