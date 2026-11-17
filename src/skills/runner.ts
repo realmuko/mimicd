@@ -273,6 +273,8 @@ export class SkillRunner {
           r = await probe("bottom", k);
           if (r.hit) return { via: r.via, title: r.title ?? null };
         }
+        // 换方向必须清掉对比基准：否则第一屏「和刚才一样」会被当成到边，永远不会向上翻
+        prev = null;
         for (let k = 1; k <= 6; k++) {
           const m = await move("top", prev);
           prev = m.now;

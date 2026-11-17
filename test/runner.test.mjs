@@ -349,3 +349,41 @@ test("runner：找链接卡片先回底部，OCR 认出「标题+来源」就点
   // 先向底部滑过一屏
   assert.ok(calls.filter((c) => c[0] === "path").length >= 1);
 });
+
+test("runner：底部到边后仍会换方向向上翻（不是一比较相同就放弃）", async () => {
+  const png = encode(chatScreen());
+  const { device, calls } = makeDevice({ screen: chatScreen() });
+  device.adb.screencap = async () => ({ png, width: 1080, height: 2160, ms: 600 });
+  device.injector.path = async (points) => {
+    calls.push(["path", points[0].y, points[points.length - 1].y]);
+  };
+  let ocrCalls = 0;
+  const ocr = {
+    async recognize() {
+      ocrCalls++;
+      if (ocrCalls < 3) return { lines: [], text: "", ms: 10 };
+      return {
+        lines: [
+          { text: "你，想家了吗？", x: 198, y: 900, w: 302, h: 46 },
+          { text: "人民网", x: 253, y: 1152, w: 91, h: 29 },
+        ],
+        text: "",
+        ms: 10,
+      };
+    },
+  };
+  const actuator = new Actuator(device, { rng: createRng(11) });
+  const runner = new SkillRunner({ device, actuator, graph: GRAPH, ocr });
+  const skill = {
+    ...SKILL,
+    pre: [{ kind: "page", value: "chat" }],
+    steps: [{ op: "act.tap_link_card", args: {} }],
+    post: [],
+  };
+  const result = await runner.run(skill, {});
+  assert.equal(result.ok, true, result.reason);
+  const paths = calls.filter((c) => c[0] === "path");
+  assert.equal(paths.length, 2, "先向底部滑一次、到边后向上滑一次");
+  assert.ok(paths[0][1] > paths[0][2], "第一次是向底部（y 变小）");
+  assert.ok(paths[1][1] < paths[1][2], "第二次是向顶部（y 变大）");
+});

@@ -30,7 +30,7 @@ const bmp = decode(shot.png);
 const pixel = findLinkCards(bmp, area);
 console.log(`像素白卡：${pixel.length} 张`, pixel.map((c) => JSON.stringify(c.rect)).join(" "));
 
-for (const scale of [2, 3]) {
+for (const scale of [2, 3, 4]) {
   const ocr = new Ocr({ script: "<repo>/tools/ocr/ocr.ps1", workDir: "<repo>/data/tmp", scale });
   const r = await ocr.recognize(shot.png, area);
   const title = findCardTitle(r.lines);
