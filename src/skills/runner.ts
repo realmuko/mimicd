@@ -341,79 +341,98 @@ export class SkillRunner {
       case "act.tap_sticker_mood": {
         if (!this.#deps.stickers) throw new SkillRunError("没有配置表情库（deps.stickers 为空）");
         const mood = String(args["mood"] ?? "").trim();
-        const shot = await this.#deps.device.adb.screencap();
-        const bmp = decode(shot.png);
         const scan = (this.#deps.graph.pages["sticker_panel"]?.grid as { scan?: unknown } | undefined)?.scan as
           | import("../perception/cells.ts").PanelGrid
           | undefined;
         if (!scan) throw new SkillRunError("页面图里没有 sticker_panel.grid.scan");
-        const cells = findStickerCells(bmp, scan);
-        if (cells.length === 0) throw new SkillRunError("面板里没认出贴纸");
 
-        // 把屏幕上每一格和库里的条目对上。
-        // 一格只能代表一张：同一个 entry 不许同时占两格（原来不同贴纸会被认成同一张，
-        // 于是发送统计和情绪标签都错，连发同一张也是这么来的）。
-        const matches: Array<{ cell: (typeof cells)[number]; entry: import("../stickers/library.ts").StickerEntry }> = [];
-        const used = new Set<string>();
+        const screen = this.#deps.graph.device.screen;
+        const gridArea = rectOf(this.#deps.graph, "sticker_panel", "grid_area", screen.w, screen.h);
+        const midX = gridArea.x + gridArea.w / 2;
+        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        const gridShot = () => this.#deps.device.adb.screencap();
 
-        let learned = 0;
-        for (const cell of cells) {
-          const piece = crop(bmp, cell.rect);
+        // 收藏变多后面板要滚动：先回顶部，再一屏一屏往下找；
+        // 候选记下「第几屏」，选中后滚回去点它（格子坐标不能跨屏复用）。
+        // 一屏推进「一排」：滚太多会跳行（真机上格子间距约 199px）
+        const stepPx = Math.round(scan.pitchY * screen.h);
+        const scroll = async (dir: "top" | "down"): Promise<boolean> => {
+          const before = decode((await gridShot()).png);
+          const y0 = Math.round(gridArea.y + gridArea.h * (dir === "down" ? 0.7 : 0.35));
+          const y1 = dir === "down" ? y0 - stepPx : y0 + stepPx;
+          await this.#deps.actuator.swipe({ x: midX, y: y0 }, { x: midX, y: y1 }, 240);
+          await sleep(500);
+          const after = decode((await gridShot()).png);
+          return regionDiff(before, after, gridArea, 10).ratio >= 0.002;
+        };
+
+        const matchEntry = (piece: Bitmap) => {
           const feat = stickerFeatures(piece);
-          // 先按紧阈值认；认不出再按松阈值找「同一张的近似」（避免同一格每轮都新建一条 → 永远被当成没发过）
-          let entry = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash);
-          if (entry && used.has(entry.id)) entry = null;
-          if (!entry) {
-            const near = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash, 0.88, 30);
-            if (near && !used.has(near.id)) entry = near;
-          }
-          // 认不出的格子：它们本来就是收藏里的贴纸，打标收进库（最多两张/次）——
-          // 库越小越容易「老是同一张」，这样用几次库就跟面板对上了。
-          if (!entry && this.#deps.labeler && learned < 2) {
-            try {
-              const label = await this.#deps.labeler.label(piece);
-              entry = this.#deps.stickers.upsert({
-                dhash: feat.dhash,
-                hist: feat.hist,
-                mood: label.mood,
-                tags: label.tags ?? [],
-                funny: label.funny,
-                source: "panel",
-              });
-              learned++;
-            } catch {
-              entry = null;
-            }
-          }
-          if (!entry) continue;
-          used.add(entry.id);
-          entry.collectedAt = entry.collectedAt ?? Date.now();
-          this.#deps.stickers.save();
-          matches.push({ cell, entry });
-        }
-        // 面板里出现的，说明确实在收藏里
-        for (const m of matches) {
-          if (!m.entry.collectedAt) {
-            m.entry.collectedAt = Date.now();
-            this.#deps.stickers.save();
-          }
+          return (
+            this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash) ??
+            this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash, 0.88, 30)
+          );
+        };
+
+        for (let i = 0; i < 6; i++) {
+          if (!(await scroll("top"))) break;
         }
 
-        const pool = mood ? matches.filter((m) => m.entry.mood === mood || m.entry.tags.includes(mood)) : matches;
-        // 选图轮换：**上次发得最久的那张优先**（全是「最近发过」时也要轮换，否则永远挑最好玩的那张）
-        const lastSentAt = (e: { sends: number[] }) =>
-          e.sends.length > 0 ? Math.max(...e.sends) : 0;
-        const chosen = (pool.length > 0 ? pool : matches)
+        type StickerCell = ReturnType<typeof findStickerCells>[number];
+        type Cand = { screen: number; cell: StickerCell; entry: import("../stickers/library.ts").StickerEntry };
+        const candidates: Cand[] = [];
+        for (let s = 0; s < 5; s++) {
+          const bmp = decode((await gridShot()).png);
+          const used = new Set<string>();
+          for (const cell of findStickerCells(bmp, scan)) {
+            const entry = matchEntry(crop(bmp, cell.rect));
+            if (!entry || used.has(entry.id)) continue;
+            used.add(entry.id);
+            candidates.push({ screen: s, cell, entry });
+          }
+          if (!(await scroll("down"))) break;
+        }
+        if (candidates.length === 0) {
+          throw new SkillRunError(`面板里没有库里的贴纸（库里 ${this.#deps.stickers.size} 张；收藏可能还没收进来）`);
+        }
+
+        const lastSentAt = (e: { sends: number[] }) => (e.sends.length > 0 ? Math.max(...e.sends) : 0);
+        const pool = mood ? candidates.filter((c) => c.entry.mood === mood || c.entry.tags.includes(mood)) : candidates;
+        const chosen = (pool.length > 0 ? pool : candidates)
           .slice()
-          .sort((a, b) => lastSentAt(a.entry) - lastSentAt(b.entry) || b.entry.funny - a.entry.funny)[0];
-        if (!chosen) throw new SkillRunError(`面板里没有库里的贴纸（认出了 ${cells.length} 格，库里 ${this.#deps.stickers.size} 张）`);
+          .sort((a, b) => lastSentAt(a.entry) - lastSentAt(b.entry) || b.entry.funny - a.entry.funny)[0]!;
 
-        const cx = chosen.cell.rect.x + chosen.cell.rect.w / 2;
-        const cy = chosen.cell.rect.y + chosen.cell.rect.h / 2;
+        // 滚回它所在那一屏，重新定位同一个条目
+        for (let i = 0; i < 6; i++) {
+          if (!(await scroll("top"))) break;
+        }
+        for (let s = 0; s < chosen.screen; s++) {
+          if (!(await scroll("down"))) break;
+        }
+        const bmp = decode((await gridShot()).png);
+        const cells = findStickerCells(bmp, scan);
+        let hit = cells.find((cell) => matchEntry(crop(bmp, cell.rect))?.id === chosen.entry.id);
+        if (!hit) {
+          // 特征没对上（缩放/压缩差异）：退回「离原来那格最近」的一格
+          hit = cells
+            .slice()
+            .sort((a, b) => Math.abs(a.rect.y - chosen.cell.rect.y) - Math.abs(b.rect.y - chosen.cell.rect.y))[0];
+        }
+        if (!hit) throw new SkillRunError("滚回去之后找不到那一格了");
+
+        const cx = hit.rect.x + hit.rect.w / 2;
+        const cy = hit.rect.y + hit.rect.h / 2;
         await this.#deps.actuator.tapPoint(cx, cy, 60);
         this.#deps.stickers.markSent(chosen.entry);
+        chosen.entry.collectedAt = chosen.entry.collectedAt ?? Date.now();
         this.#deps.stickers.save();
-        return { mood: chosen.entry.mood, slot: chosen.cell.index, funny: chosen.entry.funny, tags: chosen.entry.tags };
+        return {
+          mood: chosen.entry.mood,
+          slot: hit.index,
+          funny: chosen.entry.funny,
+          tags: chosen.entry.tags,
+          screen: chosen.screen,
+        };
       }
 
       case "act.collect_sticker": {

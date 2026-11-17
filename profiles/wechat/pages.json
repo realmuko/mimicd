@@ -207,10 +207,10 @@
           "cellW": 0.095,
           "cellH": 0.083,
           "areaX": 0.03,
-          "areaY": 0.66,
-          "areaW": 0.55,
-          "areaH": 0.32,
-          "maxRows": 3
+          "areaY": 0.68,
+          "areaW": 0.75,
+          "areaH": 0.3,
+          "maxRows": 2
         }
       },
       "notes": [
