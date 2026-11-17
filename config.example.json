@@ -1,0 +1,31 @@
+{
+  "_说明": "复制成 data/config.json 生效。命令行参数优先于这里。",
+
+  "policy": {
+    "whitelist": ["文件传输助手"],
+    "quietHours": [23, 8],
+    "minGapMs": 300000,
+    "maxPerHour": 6,
+    "requireOtherSide": true,
+    "maxReplyChars": 200
+  },
+
+  "autochat": {
+    "perChatCooldownMs": 300000,
+    "maxBackSteps": 3
+  },
+
+  "brain": {
+    "kind": "scripted",
+    "_http_示例": {
+      "kind": "http",
+      "url": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat",
+      "apiKey": "sk-...",
+      "system": "你在手机上用自己的微信号和人聊天。只回一句自然的口语，不要解释、不要加引号、不要超过 60 字。"
+    }
+  },
+
+  "ocrScript": "tools/ocr/ocr.ps1",
+  "ocrScale": 4
+}

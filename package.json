@@ -11,7 +11,9 @@
   "scripts": {
     "test": "node --test",
     "typecheck": "tsc --noEmit",
-    "probe": "node tools/probe/probe.ts"
+    "probe": "node tools/probe/probe.ts",
+    "daemon": "node tools/daemon.ts",
+    "tick": "node tools/daemon.ts --once"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

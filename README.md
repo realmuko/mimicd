@@ -44,6 +44,13 @@
 node --test             # 15 个离线用例：事件流、工件仓、技能契约，不需要手机
 ```
 
+## M2：自动监测 + 自动聊天（2026-11-17）
+
+`node tools/daemon.ts --adb "<adb>" --interval 20` 起一个 daemon：
+扫列表红点 → 进会话 → OCR 读尾部 → 去重 → 策略判定 → 脑子出稿 → 技能发送 → 回到列表，全程落事件，
+同时提供 `127.0.0.1:65480` 的 HTTP（/health /state /events /intent /control /skills）。
+架构与验证矩阵见 [`docs/architecture-m2.md`](docs/architecture-m2.md)。
+
 ## M1 进度（2026-11-17 夜）
 
 已落地并在真机跑通：

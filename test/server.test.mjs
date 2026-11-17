@@ -1,0 +1,144 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { startDaemonServer } from "../src/daemon/server.ts";
+import { World } from "../src/world/state.ts";
+import { EventLog } from "../src/eventlog.ts";
+
+function makeDeps(overrides = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "daemon-"));
+  const file = join(dir, "run.jsonl");
+  const log = new EventLog({ file, run: "r-test" });
+  log.append("message.seen", { chat: "张三", text: "在吗" }, { src: "test" });
+  const world = new World();
+  world.ingest("张三", [{ text: "在吗", from: "other", y: 500, source: "ocr" }]);
+
+  const calls = [];
+  const deps = {
+    world,
+    auto: {
+      async tick() {
+        calls.push("tick");
+        return { acted: true, chat: "张三", replied: false, reason: "测试", ms: 5 };
+      },
+    },
+    registry: {
+      issues: [],
+      skills: new Map([
+        [
+          "wechat.send_text",
+          { id: "wechat.send_text", version: 2, title: "发文本", intent: "reply", idempotency: "unsafe" },
+        ],
+      ]),
+      resolve(id) {
+        if (id !== "wechat.send_text") throw new Error(`没有技能 ${id}`);
+        return { skill: { id }, params: { text: "hi" } };
+      },
+    },
+    runner: {
+      async run() {
+        calls.push("run");
+        return { ok: true, skillId: "wechat.send_text", steps: 1, ms: 1, outputs: {} };
+      },
+    },
+    eventLog: log,
+    eventFile: file,
+    state: { paused: false, dryRun: false, startedAt: Date.now() - 1000 },
+    control: async (action) => {
+      calls.push(`control:${action}`);
+      return { ok: true, message: `did ${action}` };
+    },
+    probe: async () => ({ focus: "com.tencent.mm/ui.LauncherUI", page: "list", online: true }),
+    ...overrides,
+  };
+  return { deps, file, calls };
+}
+
+async function get(port, path) {
+  const res = await fetch(`http://127.0.0.1:${port}${path}`);
+  return { status: res.status, body: await res.json() };
+}
+async function post(port, path, body) {
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+test("daemon：/health /state /skills /events", async () => {
+  const { deps } = makeDeps();
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const health = await get(d.port, "/health");
+    assert.equal(health.status, 200);
+    assert.equal(health.body.ok, true);
+    assert.equal(health.body.paused, false);
+    assert.equal(health.body.device.page, "list");
+    assert.equal(health.body.run, "r-test");
+
+    const state = await get(d.port, "/state");
+    assert.equal(state.body.world.chats["张三"].lastText, "在吗");
+
+    const skills = await get(d.port, "/skills");
+    assert.deepEqual(skills.body.skills.map((s) => s.id), ["wechat.send_text"]);
+
+    const events = await get(d.port, "/events?limit=10");
+    assert.equal(events.body.events.length, 1);
+    assert.equal(events.body.events[0].kind, "message.seen");
+  } finally {
+    await d.close();
+  }
+});
+
+test("daemon：/intent 调技能，未知技能返回 422/500 而不是假装成功", async () => {
+  const { deps } = makeDeps();
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const ok = await post(d.port, "/intent", { skill: "wechat.send_text", params: { text: "hi" } });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.ok, true);
+
+    const bad = await post(d.port, "/intent", { skill: "wechat.nope", params: {} });
+    assert.ok(bad.status >= 400);
+    assert.equal(bad.body.ok, false);
+  } finally {
+    await d.close();
+  }
+});
+
+test("daemon：/control 与 /tick", async () => {
+  const { deps, calls } = makeDeps();
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const c = await post(d.port, "/control", { action: "pause" });
+    assert.equal(c.status, 200);
+    assert.deepEqual(calls, ["control:pause"]);
+
+    const t = await post(d.port, "/tick", {});
+    assert.equal(t.body.result.acted, true);
+    assert.deepEqual(calls, ["control:pause", "tick"]);
+  } finally {
+    await d.close();
+  }
+});
+
+test("daemon：token 保护 / 404 明确报错", async () => {
+  const { deps } = makeDeps({ token: "s3cret" });
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const noAuth = await get(d.port, "/health");
+    assert.equal(noAuth.status, 401);
+    const ok = await fetch(`http://127.0.0.1:${d.port}/health?token=s3cret`);
+    assert.equal(ok.status, 200);
+    const missing = await get(d.port, "/nope?token=s3cret");
+    assert.equal(missing.status, 404);
+    assert.match(missing.body.error, /没有这个接口/);
+  } finally {
+    await d.close();
+  }
+});
