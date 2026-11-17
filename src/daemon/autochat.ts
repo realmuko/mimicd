@@ -79,6 +79,8 @@ export class AutoChat {
   readonly #cfg: AutoChatConfig;
   #busy = false;
   #collectTimes: number[] = [];
+  /** 一次性定向到某个会话（调试/补跑用） */
+  forceChatOnce?: string;
 
   constructor(deps: AutoChatDeps) {
     this.#d = deps;
@@ -123,11 +125,14 @@ export class AutoChat {
     let name: string | null;
     let rowY: number;
 
-    if (this.#cfg.forceChat) {
+    const forced = this.#cfg.forceChat || this.forceChatOnce;
+    if (this.forceChatOnce) this.forceChatOnce = undefined;
+
+    if (forced) {
       // 定向模式：不要求未读，直接在列表 OCR 里找这个名字
-      const want = this.#cfg.forceChat.replace(/\s+/g, "");
+      const want = forced.replace(/\s+/g, "");
       const hit = listOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(want));
-      if (!hit) return { acted: false, reason: `列表里没找到「${this.#cfg.forceChat}」`, ms: Date.now() - t0 };
+      if (!hit) return { acted: false, reason: `列表里没找到「${forced}」`, ms: Date.now() - t0 };
       name = cleanName(hit.text);
       rowY = hit.y + hit.h / 2;
       d.eventLog?.append("note", { stage: "force-chat", hit: { text: hit.text, y: hit.y, h: hit.h }, tapY: Math.round(rowY) }, { src: "monitor" });

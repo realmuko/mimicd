@@ -31,13 +31,13 @@ export interface DaemonDeps {
   eventFile: string;
   state: DaemonState;
   /** 控制：暂停/继续/干跑/立即跑一轮 */
-  control: (action: string) => Promise<{ ok: boolean; message: string }>;
+  control: (action: string, opts?: { chat?: string }) => Promise<{ ok: boolean; message: string }>;
   /** 设备与页面现状 */
   probe: () => Promise<{ focus: string; page: string; online: boolean }>;
   /** 交接模式下的待回复队列 */
   pending?: PendingQueue;
   /** 把一句话发出去（交接模式回复用） */
-  sendText?: (text: string) => Promise<{ ok: boolean; reason?: string }>;
+  sendText?: (text: string, chat: string) => Promise<{ ok: boolean; reason?: string }>;
   token?: string;
 }
 
@@ -150,7 +150,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const item = deps.pending.get(id);
       if (!item || item.status !== "open") return send(404, { ok: false, error: `没有待回复项 ${id}（可能已过期）` });
       if (!text) return send(400, { ok: false, error: "text 不能为空" });
-      const result = await deps.sendText(text);
+      const result = await deps.sendText(text, item.chat);
       if (!result.ok) return send(422, { ok: false, error: result.reason ?? "发送失败" });
       deps.pending.reply(id, text);
       deps.eventLog.append("send.succeeded", { chat: item.chat, text, via: "handoff" }, { src: "handoff" });
@@ -167,7 +167,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
     if (req.method === "POST" && url.pathname === "/control") {
       const body = await readJson(req);
       const action = String(body["action"] ?? "");
-      const result = await deps.control(action);
+      const result = await deps.control(action, { chat: body["chat"] ? String(body["chat"]) : undefined });
       return send(result.ok ? 200 : 400, result);
     }
 

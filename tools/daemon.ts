@@ -22,7 +22,8 @@ import { SkillRunner } from "../src/skills/runner.ts";
 import { Ocr } from "../src/perception/ocr.ts";
 import { StickerLibrary } from "../src/stickers/library.ts";
 import { StickerLabeler } from "../src/stickers/labeler.ts";
-import { detectPage, decodeFrame, type PageGraph } from "../src/perception/page.ts";
+import { detectPage, decodeFrame, rectOf, type PageGraph } from "../src/perception/page.ts";
+import { cleanName, isNameLine } from "../src/monitor/scan.ts";
 import { World } from "../src/world/state.ts";
 import { AutoChat, DEFAULT_AUTOCHAT, type AutoChatConfig } from "../src/daemon/autochat.ts";
 import { startDaemonServer, type DaemonState } from "../src/daemon/server.ts";
@@ -213,7 +214,7 @@ const auto = new AutoChat({
 
 const state: DaemonState = { paused: false, dryRun, startedAt: Date.now() };
 
-const control = async (action: string): Promise<{ ok: boolean; message: string }> => {
+const control = async (action: string, opts: { chat?: string } = {}): Promise<{ ok: boolean; message: string }> => {
   switch (action) {
     case "pause":
       state.paused = true;
@@ -230,6 +231,7 @@ const control = async (action: string): Promise<{ ok: boolean; message: string }
       state.dryRun = false;
       return { ok: true, message: "恢复真发" };
     case "tick": {
+      if (opts.chat) auto.forceChatOnce = opts.chat;
       const r = await auto.tick();
       state.lastTick = { at: Date.now(), acted: r.acted, reason: r.reason, replied: r.replied, chat: r.chat };
       return { ok: true, message: JSON.stringify(r) };
@@ -246,7 +248,30 @@ const probe = async () => {
   return { focus: focus.component, page: guess.page, online: true };
 };
 
-const sendText = async (text: string): Promise<{ ok: boolean; reason?: string }> => {
+async function enterChat(name: string): Promise<boolean> {
+  for (let i = 0; i < 4; i++) {
+    const f = await adb.screencap();
+    if (detectPage(decodeFrame(f), await adb.focus()).page === "list") break;
+    await adb.shell("input keyevent KEYCODE_BACK", 15000);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  const shot = await adb.screencap();
+  const area = rectOf(graph, "list", "list_area", graph.device.screen.w, graph.device.screen.h);
+  const listOcr = await ocr.recognize(shot.png, area);
+  const want = name.replace(/\s+/g, "");
+  const line = listOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(want));
+  if (!line) return false;
+  await injector.tap(Math.round(graph.device.screen.w * 0.3), Math.round(line.y + line.h / 2), 70);
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    const f = await adb.screencap();
+    if (detectPage(decodeFrame(f), await adb.focus()).page === "chat") return true;
+  }
+  return false;
+}
+
+const sendText = async (text: string, chat: string): Promise<{ ok: boolean; reason?: string }> => {
+  if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
   const skill = registry.get("wechat.send_text");
   if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };
   return withAutomationIme(async () => {
