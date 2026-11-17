@@ -322,3 +322,82 @@ test("自动聊天：群聊没 @ 我 → 读完但不回", async () => {
   assert.equal(sent, 0);
   assert.equal(world.chat("家庭群").kind, "group");
 });
+
+test("自动聊天：对方发的链接卡片标成 [链接]（主模型才知道能点进去读）", async () => {
+  const { device } = makeDevice();
+  const root = mkdtempSync(join(tmpdir(), "auto-link-"));
+  const log = new EventLog({ file: join(root, "run.jsonl"), run: "r-auto-link" });
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7), eventLog: log });
+  const ocr = makeOcr({
+    chat: [
+      { text: "在吗", x: 150, y: 260, w: 120, h: 40 },
+      { text: "你，想家了吗？", x: 198, y: 700, w: 302, h: 46 },
+      { text: "人民网", x: 253, y: 952, w: 91, h: 29 },
+    ],
+  });
+  let ctx = null;
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr,
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "x" }),
+    eventLog: log,
+    config: {
+      policy: { quietHours: null, whitelist: [] },
+      rowTapX: 300,
+      handoff: async (c) => {
+        ctx = c;
+        return "pending-1";
+      },
+    },
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.acted, true, result.reason);
+  assert.ok(ctx, "应该挂起给主模型");
+  const last = ctx.messages[ctx.messages.length - 1];
+  assert.equal(last.text, "[链接] 你，想家了吗？ · 人民网");
+
+  const notes = readEvents(log.file).filter((e) => e.kind === "note" && e.data.stage === "link-card");
+  assert.equal(notes.length, 1, "要落一条 link-card note，方便回放归因");
+});
+
+test("自动聊天：第一次点错行进了别的会话，退回来重试、标题对上才继续", async () => {
+  const { device } = makeDevice();
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const base = makeOcr();
+  let headerCalls = 0;
+  const ocr = {
+    async recognize(png, region) {
+      if (png === CHAT_PNG && region && region.y < 100) {
+        headerCalls++;
+        const text = headerCalls === 1 ? "李四" : "张三";
+        return { lines: [{ text, x: 400, y: 80, w: 100, h: 40 }], text, ms: 5 };
+      }
+      return base.recognize(png, region);
+    },
+  };
+  const sent = [];
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr,
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "收到「{last}」" }),
+    config: { policy: { quietHours: null, whitelist: [] } },
+    sendReply: async (text) => {
+      sent.push(text);
+      return { ok: true };
+    },
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.replied, true, result.reason);
+  assert.deepEqual(sent, ["收到「出来吃饭」"]);
+  assert.equal(headerCalls, 2, "第一次标题不对，重试一次才对上");
+});

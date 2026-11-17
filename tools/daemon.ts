@@ -224,7 +224,7 @@ const control = async (action: string, opts: { chat?: string } = {}): Promise<{ 
       return { ok: true, message: "恢复真发" };
     case "tick": {
       if (opts.chat) auto.forceChatOnce = opts.chat;
-      const r = await auto.tick();
+      const r = await exclusive("tick", () => auto.tick());
       state.lastTick = { at: Date.now(), acted: r.acted, reason: r.reason, replied: r.replied, chat: r.chat };
       return { ok: true, message: JSON.stringify(r) };
     }
@@ -314,27 +314,56 @@ async function sendReplyInner(chat: string, kind: ReplyKind): Promise<{ ok: bool
   });
 }
 
-/** 读链接：进会话 → 跑 read_article → 把 OCR 文本拼起来 → 回到会话 */
-async function readLink(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string }> {
+/** 读链接：进会话 → 先试微信自带 AI 摘要 → 不行再读正文 → 回到会话 */
+async function readLink(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string; via?: string }> {
   return exclusive("read-link", () => readLinkInner(chat, which));
 }
 
-async function readLinkInner(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string }> {
-  if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
-  const skill = registry.get("wechat.read_article");
-  if (!skill) return { ok: false, reason: "没有 read_article 技能" };
-  const result = await skillsRunner.run(skill, which ? { which } : {});
+function collectText(outputs: Record<string, unknown>): string {
   const chunks: string[] = [];
-  for (const value of Object.values(result.outputs)) {
+  for (const value of Object.values(outputs)) {
     const text = (value as { text?: unknown } | null)?.text;
     if (typeof text === "string" && text.trim()) chunks.push(text.trim());
   }
-  if (!result.ok && chunks.length === 0) return { ok: false, reason: result.reason };
-  return { ok: true, text: chunks.join("\n---\n").slice(0, 6000) };
+  return chunks.join("\n---\n");
+}
+
+/** 摘要这条路走不通时，先退回会话页，正文技能的前置条件要求停在 chat。 */
+async function backToChat(maxSteps = 3): Promise<boolean> {
+  for (let i = 0; i < maxSteps; i++) {
+    const frame = await adb.screencap();
+    const guess = detectPage(decodeFrame(frame), await adb.focus());
+    if (guess.page === "chat") return true;
+    await adb.shell("input keyevent KEYCODE_BACK", 15000);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
+
+async function readLinkInner(chat: string, which?: number): Promise<{ ok: boolean; text?: string; reason?: string; via?: string }> {
+  if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
+  const params = which ? { which } : {};
+
+  // AI 摘要是捷径：快一倍、文字也更干净；但有的文章没有这个按钮（视频/非公众号），要能退
+  const summary = registry.get("wechat.read_summary");
+  if (summary) {
+    const result = await skillsRunner.run(summary, params);
+    const text = collectText(result.outputs);
+    if (result.ok && text) return { ok: true, text: text.slice(0, 6000), via: "summary" };
+    eventLog.append("note", { stage: "read-link", chat, fallback: "article", reason: result.reason ?? "摘要为空" }, { src: "handoff" });
+    if (!(await backToChat())) return { ok: false, reason: `摘要读不到，也退不回会话：${result.reason ?? "未知"}` };
+  }
+
+  const skill = registry.get("wechat.read_article");
+  if (!skill) return { ok: false, reason: "没有 read_article 技能" };
+  const result = await skillsRunner.run(skill, params);
+  const text = collectText(result.outputs);
+  if (!result.ok && !text) return { ok: false, reason: result.reason };
+  return { ok: true, text: text.slice(0, 6000), via: "article" };
 }
 
 const daemon = await startDaemonServer(
-  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, token: fileConfig.token },
+  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, allowPendingInject: flag("allow-pending-inject"), exclusive, token: fileConfig.token },
   { port },
 );
 

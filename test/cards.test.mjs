@@ -97,3 +97,14 @@ test("OCR 定位卡片：两条普通气泡不算（后缀行字太大）", () =
   ];
   assert.equal(findCardTitle(lines), null);
 });
+
+test("OCR 定位卡片：把来源一起带回来（主模型要知道这是哪个号发的）", () => {
+  const lines = [
+    { text: "你，想家了吗？", x: 198, y: 1564, w: 302, h: 46 },
+    { text: "人民网", x: 253, y: 1816, w: 91, h: 29 },
+  ];
+  const card = findCardTitle(lines);
+  assert.ok(card);
+  assert.equal(card.text, "你，想家了吗？");
+  assert.equal(card.source, "人民网");
+});

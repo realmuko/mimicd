@@ -161,9 +161,19 @@ export function findLinkCards(bmp: Bitmap, area: Rect, opts: CardOptions = {}): 
  * 特征：左对齐（|Δx| ≤ 80）、标题大（h ≥ 34）、来源小（h ≤ 32）、纵向相距 120–400。
  * 普通气泡后面跟时间行时 Δx ≈ 230，会被挡掉。
  */
+export interface CardTitle {
+  text: string;
+  /** 来源（公众号/媒体名），拿不到就空串 */
+  source: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export function findCardTitle(
   lines: Array<{ text: string; x: number; y: number; w: number; h: number }>,
-): { text: string; x: number; y: number; w: number; h: number } | null {
+): CardTitle | null {
   const big = lines.filter((l) => l.h >= 34 && l.w >= 100 && l.text.trim().length >= 2);
   const small = lines.filter((l) => l.h <= 32 && l.w >= 20 && l.w <= 400 && l.text.trim().length >= 2);
   for (const title of big.sort((a, b) => b.y - a.y)) {
@@ -171,7 +181,7 @@ export function findCardTitle(
       const dy = s.y - title.y;
       return dy >= 120 && dy <= 400 && Math.abs(s.x - title.x) <= 80;
     });
-    if (source) return title;
+    if (source) return { text: title.text, source: source.text, x: title.x, y: title.y, w: title.w, h: title.h };
   }
   return null;
 }

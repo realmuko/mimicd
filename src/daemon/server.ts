@@ -40,6 +40,10 @@ export interface DaemonDeps {
   sendReply?: (chat: string, kind: { text?: string; stickerMood?: string }) => Promise<{ ok: boolean; reason?: string }>;
   /** 读链接（交接模式的「眼睛」） */
   readLink?: (chat: string, which?: number) => Promise<{ ok: boolean; text?: string; reason?: string }>;
+  /** 允许 POST /pending/inject（只在本地测链路时打开） */
+  allowPendingInject?: boolean;
+  /** 设备互斥：/intent 也是「碰手机」的动作，必须和 tick 排同一条队 */
+  exclusive?: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
   token?: string;
 }
 
@@ -134,13 +138,44 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const skill = String(body["skill"] ?? "");
       const params = (body["params"] ?? {}) as Record<string, unknown>;
       const { skill: resolved, params: parsed } = deps.registry.resolve(skill, params);
-      const result = await deps.runner.run(resolved, parsed);
+      const run = () => deps.runner.run(resolved, parsed);
+      const result = deps.exclusive ? await deps.exclusive("intent", run) : await run();
       return send(result.ok ? 200 : 422, { ok: result.ok, result });
     }
 
     if (req.method === "GET" && url.pathname === "/pending") {
       if (!deps.pending) return send(200, { ok: true, items: [], note: "未开启交接模式" });
       return send(200, { ok: true, items: deps.pending.list() });
+    }
+
+    // 测试用：不等真消息也能验「引擎挂起 → 会话唤醒 → 主模型回话」这一整条链。
+    // 只监听 127.0.0.1，且必须显式打开（默认关），不会在产线路径上被误用。
+    if (req.method === "POST" && url.pathname === "/pending/inject") {
+      if (!deps.pending) return send(400, { ok: false, error: "未开启交接模式" });
+      if (!deps.allowPendingInject) return send(403, { ok: false, error: "测试注入没打开（启动时加 --allow-pending-inject）" });
+      const body = await readJson(req);
+      const chat = String(body["chat"] ?? "");
+      if (!chat) return send(400, { ok: false, error: "chat 不能为空" });
+      const rawMessages = Array.isArray(body["messages"]) ? body["messages"] : [];
+      const messages = rawMessages
+        .map((m) => {
+          const rec = m as Record<string, unknown>;
+          return {
+            from: (String(rec["from"] ?? "other") === "me" ? "me" : "other") as "me" | "other",
+            text: String(rec["text"] ?? ""),
+          };
+        })
+        .filter((m) => m.text);
+      if (messages.length === 0) return send(400, { ok: false, error: "messages 不能为空" });
+      const kindRaw = String(body["kind"] ?? "dm");
+      const item = deps.pending.add({
+        chat,
+        kind: kindRaw === "group" ? "group" : "dm",
+        needsJudgment: body["needsJudgment"] === true,
+        messages,
+      });
+      deps.eventLog.append("intent.pending", { chat, id: item.id, injected: true }, { src: "handoff" });
+      return send(200, { ok: true, item });
     }
 
     if (req.method === "POST" && url.pathname === "/pending/reply") {

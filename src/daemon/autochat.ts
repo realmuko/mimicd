@@ -5,7 +5,7 @@
  * 多会话只在时间上轮流。所有判断都落事件，失败也落，方便事后复盘。
  */
 
-import type { DevicePorts } from "../device/types.ts";
+import type { DevicePorts, Frame } from "../device/types.ts";
 import type { EventLog } from "../eventlog.ts";
 import type { Bitmap, Rect } from "../image/image.ts";
 import { decode } from "../image/image.ts";
@@ -13,6 +13,7 @@ import type { Ocr } from "../perception/ocr.ts";
 import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
 import { waitStable } from "../perception/stable.ts";
 import { messagesFromOcr, mergeBubbles } from "../monitor/read.ts";
+import { findCardTitle } from "../perception/cards.ts";
 import { cleanName, isNameLine, scanList } from "../monitor/scan.ts";
 import { detectChatKind, titleFromOcr, titleMatches } from "../monitor/chat.ts";
 import { decide, pickChat, type PolicyConfig } from "../policy/policy.ts";
@@ -145,52 +146,79 @@ export class AutoChat {
       rowY = scan.rows.find((r) => r.name === name)!.y;
     }
 
-    // 4) 进去
-    await d.actuator.tapPoint(this.#cfg.rowTapX, Math.round(rowY), 60);
-    let entered = await this.#waitPage("chat", 6000);
-
-    // 列表随时可能在重排：点一次没进去，就重新扫一遍列表再点一次
-    for (let retry = 0; retry < 2 && !entered; retry++) {
-      await this.#ensureList();
-      const again = await d.device.adb.screencap();
-      const againOcr = await d.ocr.recognize(again.png, listArea);
-      const line = againOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(name.replace(/\s+/g, "")));
-      if (!line) break;
-      const retryY = line.y + line.h / 2;
-      await d.actuator.tapPoint(this.#cfg.rowTapX, Math.round(retryY), 60);
-      entered = await this.#waitPage("chat", 6000);
-    }
-
-    if (!entered) {
-      await this.#backToList();
-      return { acted: false, chat: name, reason: "点了会话行但没进到聊天页（重试后仍失败）", ms: Date.now() - t0 };
-    }
-    await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000 });
-
-    // 5) 核对标题（点错行/界面没切过去就别回），顺便定群/私聊
-    const chatShot = await d.device.adb.screencap();
-    const chatBmp: Bitmap = decode(chatShot.png);
-    // 标题只在中间那条带里：整条头栏会把「〈 未读数」也读进来，最长的那行反而不是标题
-    const headerArea = rectOf(d.graph, "chat", "title_strip", screen.w, screen.h);
-    const headerOcr = await d.ocr.recognize(chatShot.png, headerArea);
-    const title = titleFromOcr(headerOcr.lines);
-    if (title && !titleMatches(name, title)) {
-      d.eventLog?.append("note", { stage: "enter-chat", wanted: name, got: title }, { src: "monitor" });
-      await this.#backToList();
-      if (this.#cfg.forceChat && attempt < 1) {
-        await this.#backToList();
-        return this.#tick(attempt + 1);
+    // 4) 进去并核对标题。列表在「扫描」和「点击」之间会重排，进错会话必须退回来重试 ——
+    //    只看「页面是不是 chat」发现不了（别的群也是 chat），标题是唯一的硬证据。
+    let entered = false;
+    let title: string | null = null;
+    let chatShot: Frame | null = null;
+    let lastWrongTitle: string | null = null;
+    for (let tries = 0; tries < 3; tries++) {
+      let tapY = Math.round(rowY);
+      if (tries > 0) {
+        await this.#ensureList();
+        const again = await d.device.adb.screencap();
+        const againOcr = await d.ocr.recognize(again.png, listArea);
+        const line = againOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(name.replace(/\s+/g, "")));
+        if (!line) break;
+        tapY = Math.round(line.y + line.h / 2);
       }
-      return { acted: false, chat: name, reason: `进错会话：想进「${name}」，实际「${title}」`, ms: Date.now() - t0 };
+      await d.actuator.tapPoint(this.#cfg.rowTapX, tapY, 60);
+      entered = await this.#waitPage("chat", 6000);
+      if (!entered) continue;
+      await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000 });
+
+      const shot = await d.device.adb.screencap();
+      // 标题只在中间那条带里：整条头栏会把「〈 未读数」也读进来，最长的那行反而不是标题
+      const headerArea = rectOf(d.graph, "chat", "title_strip", screen.w, screen.h);
+      const headerOcr = await d.ocr.recognize(shot.png, headerArea);
+      const got = titleFromOcr(headerOcr.lines);
+      if (!got || titleMatches(name, got)) {
+        title = got;
+        chatShot = shot;
+        break;
+      }
+      lastWrongTitle = got;
+      d.eventLog?.append("note", { stage: "enter-chat", wanted: name, got, tries }, { src: "monitor" });
+      entered = false;
+      await this.#backToList();
     }
+
+    if (!entered || !chatShot) {
+      await this.#backToList();
+      return {
+        acted: false,
+        chat: name,
+        reason: lastWrongTitle
+          ? `进错会话：想进「${name}」，实际「${lastWrongTitle}」（重试 3 次仍对不上）`
+          : "点了会话行但没进到聊天页（重试后仍失败）",
+        ms: Date.now() - t0,
+      };
+    }
+
+    // 5) 顺便定群/私聊
     const kind = detectChatKind(title || name);
     d.world.patch(name, { kind });
 
+    const chatBmp: Bitmap = decode(chatShot.png);
     const chatArea = rectOf(d.graph, "chat", "message_area", screen.w, screen.h);
     const chatOcr = await d.ocr.recognize(chatShot.png, chatArea);
     const parsed = mergeBubbles(
       messagesFromOcr(chatOcr.lines, { width: screen.w, meRatio: 0.55, minHeight: 20, bmp: chatBmp }),
     );
+
+    // 对方发的链接卡片：OCR 里就是「标题 + 来源」两行，正文把来源当小字滤掉了，
+    // 主模型只会看到一句莫名的话。认出卡片后把那条消息标成链接，它才知道可以点进去读。
+    const card = findCardTitle(chatOcr.lines);
+    if (card) {
+      const near = parsed.find((m) => m.from === "other" && Math.abs(m.y - card.y) < card.h * 2.5);
+      const label = `[链接] ${card.text}${card.source ? ` · ${card.source}` : ""}`;
+      if (near) near.text = label;
+      d.eventLog?.append(
+        "note",
+        { stage: "link-card", chat: name, title: card.text, source: card.source, marked: Boolean(near) },
+        { src: "monitor" },
+      );
+    }
 
     const fresh = d.world.ingest(name, parsed.map((m) => ({ text: m.text, from: m.from, y: m.y, source: "ocr" as const })));
     for (const m of fresh) {
