@@ -59,6 +59,8 @@ interface FileConfig {
   policy?: Partial<PolicyConfig>;
   /** 主动搭话（dsh-speak-up 掷骰子决定，引擎这边只负责限额与发送） */
   proactive?: { maxPerHour?: number; maxPerDay?: number; minGapMs?: number; allowGroups?: boolean };
+  /** 回复里「带表情」的节制：概率 + 同会话冷却 */
+  reply?: { stickerChance?: number; stickerCooldownMin?: number };
   autochat?: Partial<AutoChatConfig> & { collectEveryMin?: number };
   brain?:
     | { kind: "scripted"; template?: string }
@@ -355,6 +357,13 @@ async function exclusive<T>(label: string, fn: () => Promise<T>, waitMs = 0): Pr
 
 type ReplyKind = { text?: string; stickerMood?: string };
 
+// 回复带表情的节制：模型想带，也要过这两道（用户 2026-11-17：别每条都带）
+const replyCfg = {
+  stickerChance: fileConfig.reply?.stickerChance ?? 0.5,
+  stickerCooldownMin: fileConfig.reply?.stickerCooldownMin ?? 10,
+};
+const lastStickerAt = new Map<string, number>();
+
 async function sendReply(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
   return exclusive("send", () => sendReplyInner(chat, kind), 90000);
 }
@@ -382,6 +391,28 @@ async function sendReplyInner(
     textSent = true;
   }
 
+  // 回复里「顺带一个表情」要过概率 + 冷却；只发一个表情（不写字）不过闸，那是模型明确选择
+  if (kind.stickerMood !== undefined && text) {
+    const last = lastStickerAt.get(chat) ?? 0;
+    const cooldownMs = replyCfg.stickerCooldownMin * 60 * 1000;
+    const cooling = cooldownMs > 0 && Date.now() - last < cooldownMs;
+    const missChance = replyCfg.stickerChance < 1 && Math.random() >= replyCfg.stickerChance;
+    if (cooling || missChance) {
+      eventLog.append(
+        "note",
+        {
+          stage: "sticker-gate",
+          chat,
+          skipped: cooling ? "cooldown" : "chance",
+          cooldownMin: replyCfg.stickerCooldownMin,
+          chance: replyCfg.stickerChance,
+        },
+        { src: "handoff" },
+      );
+      if (textSent) return { ok: true, textSent, stickerSent: false };
+    }
+  }
+
   // 发表情不走输入法，也不需要切 IME；但发完文字键盘还开着，
   // 表情按钮/面板的位置会被顶上去 —— 先收键盘（真机踩过：面板没打开，扫的是聊天区）
   if (kind.stickerMood !== undefined) {
@@ -404,6 +435,7 @@ async function sendReplyInner(
       return { ok: false, reason, textSent, stickerSent };
     }
     stickerSent = true;
+    lastStickerAt.set(chat, Date.now());
   }
 
   if (!textSent && !stickerSent) return { ok: false, reason: "text 和 stickerMood 都是空的" };

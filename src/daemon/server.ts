@@ -38,7 +38,10 @@ export interface DaemonDeps {
   /** 交接模式下的待回复队列 */
   pending?: PendingQueue;
   /** 交接回复：文本或表情 */
-  sendReply?: (chat: string, kind: { text?: string; stickerMood?: string }) => Promise<{ ok: boolean; reason?: string }>;
+  sendReply?: (
+    chat: string,
+    kind: { text?: string; stickerMood?: string },
+  ) => Promise<{ ok: boolean; reason?: string; textSent?: boolean; stickerSent?: boolean }>;
   /** 主动搭话：dsh-speak-up 掷中后由主模型调过来，引擎负责限额与发送 */
   say?: (chat: string, kind: { text?: string; stickerMood?: string }) => Promise<{ ok: boolean; reason?: string; refused?: string }>;
   /** 读链接（交接模式的「眼睛」） */
@@ -244,13 +247,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
         deps.pending.release(id);
         return send(422, { ok: false, error: result.reason ?? "发送失败" });
       }
+      const textSent = result.textSent ?? Boolean(text);
+      const stickerSent = result.stickerSent ?? (stickerMood !== undefined && !text);
       deps.pending.finish(id, text || `[表情:${stickerMood}]`);
       deps.eventLog.append(
         "send.succeeded",
-        { chat: item.chat, ...(text ? { text } : {}), ...(stickerMood !== undefined ? { stickerMood } : {}), via: "handoff" },
+        {
+          chat: item.chat,
+          ...(textSent && text ? { text } : {}),
+          ...(stickerSent && stickerMood !== undefined ? { stickerMood } : {}),
+          via: "handoff",
+        },
         { src: "handoff" },
       );
-      return send(200, { ok: true, id, chat: item.chat, text: text || `[表情:${stickerMood}]` });
+      const sentLabel = [textSent && text ? text : "", stickerSent && stickerMood ? `[表情:${stickerMood}]` : ""]
+        .filter(Boolean)
+        .join(" + ");
+      return send(200, { ok: true, id, chat: item.chat, text: sentLabel || "（已发送）" });
     }
 
     if (req.method === "POST" && url.pathname === "/pending/skip") {
