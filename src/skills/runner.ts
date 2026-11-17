@@ -552,7 +552,9 @@ export class SkillRunner {
       }
 
       case "act.goto_list": {
-        // 面板开着先收面板，再退出会话；最多 4 次返回
+        // 面板开着先收面板，再退出会话；最多 4 次返回。前台不是微信就不按（会在桌面乱点）
+        const f0 = await this.#deps.device.adb.focus();
+        if (f0.pkg !== "com.tencent.mm") return { page: "other", backs: 0 };
         for (let i = 0; i < 4; i++) {
           const frame = await this.#deps.device.adb.screencap();
           const page = detectPage(decode(frame.png), await this.#deps.device.adb.focus());
@@ -567,6 +569,8 @@ export class SkillRunner {
       }
 
       case "act.back": {
+        const f = await this.#deps.device.adb.focus();
+        if (f.pkg !== "com.tencent.mm") throw new SkillRunError("前台不是微信，不按返回（会在桌面上乱点）");
         await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
         return { back: true };
       }

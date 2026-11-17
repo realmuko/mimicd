@@ -83,13 +83,14 @@ function makeNav(opts = {}) {
       async focus() {
         return {
           raw: "",
-          pkg: "com.tencent.mm",
+          pkg: state.pkg,
           activity: state.page === "list" ? "com.tencent.mm.ui.LauncherUI" : "com.tencent.mm.ui.chatting.ChattingUI",
           component: "",
         };
       },
       async shell(cmd) {
         calls.push(["shell", cmd]);
+        if (cmd.includes("am start") && opts.launchable !== false) state.pkg = "com.tencent.mm";
         if (cmd.includes("KEYCODE_BACK")) state.page = "list";
         return "";
       },
@@ -236,4 +237,22 @@ test("进会话：搜索框也找不到就不硬发，把原因说清楚", async
   const result = await enterChat(device, "摸鱼闲聊群");
   assert.equal(result.ok, false);
   assert.match(result.reason, /搜索|没找到/);
+});
+
+
+test("在手机桌面：先拉回微信，再进会话（不会在桌面乱点）", async () => {
+  const { device, calls } = makeNav({ startPkg: "com.huawei.android.launcher" });
+  const result = await enterChat(device, "摸鱼闲聊群");
+  assert.equal(result.ok, true, result.reason);
+  assert.ok(calls.some((c) => c[0] === "shell" && String(c[1]).includes("am start")), "应该先把微信拉起来");
+  assert.ok(calls.some((c) => c[0] === "tap"), "拉起来之后才点");
+});
+
+test("在手机桌面且拉不起微信：什么都不点，直接说清楚", async () => {
+  const { device, calls } = makeNav({ startPkg: "com.huawei.android.launcher", launchable: false });
+  const result = await enterChat(device, "摸鱼闲聊群");
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /前台不是微信/);
+  assert.equal(calls.filter((c) => c[0] === "tap").length, 0, "桌面上一次都不许点");
+  assert.equal(calls.filter((c) => c[0] === "shell" && String(c[1]).includes("KEYCODE_BACK")).length, 0, "桌面上也不许按返回");
 });

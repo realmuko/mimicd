@@ -43,7 +43,25 @@ export interface EnterChatResult {
   via?: "list" | "search";
 }
 
+const WECHAT_PKG = "com.tencent.mm";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 确认前台是微信。不是就先拉起来；拉不起来就**什么都不点**（否则会在手机桌面上乱点到别的 App）。
+ * 这是「桌面右上角电子邮件被点开」的根因：手机被之前的返回键退出到桌面后，
+ * 还按列表坐标去点搜索/会话行。
+ */
+async function ensureWeChat(deps: NavDeps): Promise<boolean> {
+  for (let i = 0; i < 3; i++) {
+    const f = await deps.adb.focus();
+    if (f.pkg === WECHAT_PKG) return true;
+    deps.log?.(`[nav] 前台不是微信（${f.pkg || "未知"}），尝试拉起`);
+    await deps.adb.shell("am start -n com.tencent.mm/.ui.LauncherUI", 15000).catch(() => "");
+    await sleep(1200);
+  }
+  const f = await deps.adb.focus();
+  return f.pkg === WECHAT_PKG;
+}
 
 async function currentPage(deps: NavDeps): Promise<string> {
   const frame = await deps.adb.screencap();
@@ -52,6 +70,8 @@ async function currentPage(deps: NavDeps): Promise<string> {
 }
 
 async function backToList(deps: NavDeps): Promise<void> {
+  const f = await deps.adb.focus();
+  if (f.pkg !== WECHAT_PKG) return; // 已经在桌面/别的 App，按返回只会更乱
   if ((await currentPage(deps)) === "chat") {
     await deps.adb.shell("input keyevent KEYCODE_BACK", 15000);
     await sleep(350);
@@ -78,14 +98,18 @@ async function readTitle(
  */
 export async function searchChat(deps: NavDeps, name: string): Promise<boolean> {
   if (!deps.ime || !deps.withIme) return false;
+  if (!(await ensureWeChat(deps))) return false;
   const screen = deps.graph.device.screen;
 
-  // 回到列表
+  // 回到列表（只在微信里按返回）
   for (let i = 0; i < 4; i++) {
+    const f = await deps.adb.focus();
+    if (f.pkg !== WECHAT_PKG) return false;
     if ((await currentPage(deps)) === "list") break;
     await deps.adb.shell("input keyevent KEYCODE_BACK", 15000);
     await sleep(400);
   }
+  if ((await currentPage(deps)) !== "list") return false;
   const icon = rectOf(deps.graph, "list", "search_icon", screen.w, screen.h);
   await deps.injector.tap(icon.x + icon.w / 2, icon.y + icon.h / 2, 70);
 
@@ -139,6 +163,9 @@ export async function enterChat(
   name: string,
   opts: { attempts?: number; tapX?: number; search?: boolean } = {},
 ): Promise<EnterChatResult> {
+  if (!(await ensureWeChat(deps))) {
+    return { ok: false, reason: "前台不是微信（拉不起来），没有点任何东西", attempts: 0 };
+  }
   const want = name.replace(/\s+/g, "");
   const maxAttempts = opts.attempts ?? 3;
   const useSearch = opts.search !== false && Boolean(deps.ime && deps.withIme);
@@ -154,11 +181,20 @@ export async function enterChat(
   // 1) 列表里点，最多 attempts 次
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     used = attempt;
-    // 先回到列表（当前在聊天页/文章页/浮层都退回去）
+    // 先回到列表（当前在聊天页/文章页/浮层都退回去；桌面/别的 App 不按返回）
     for (let i = 0; i < 4; i++) {
+      const f = await deps.adb.focus();
+      if (f.pkg !== WECHAT_PKG) {
+        if (!(await ensureWeChat(deps))) {
+          return { ok: false, reason: "中途离开了微信（拉不回来），没有点任何东西", attempts: attempt };
+        }
+      }
       if ((await currentPage(deps)) === "list") break;
       await deps.adb.shell("input keyevent KEYCODE_BACK", 15000);
       await sleep(400);
+    }
+    if ((await currentPage(deps)) !== "list") {
+      return { ok: false, reason: `不在微信列表（${await currentPage(deps)}），没有点任何东西`, attempts: attempt };
     }
 
     // 扫列表找这一行（名字模糊匹配）
