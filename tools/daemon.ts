@@ -137,6 +137,7 @@ const autoCfg: AutoChatConfig = {
   rowTapX: fileConfig.autochat?.rowTapX ?? Math.round(graph.device.screen.w * 0.3),
   forceChat: arg("chat", "") || undefined,
   noSend,
+  allowLaunch: flag("launch-wechat"),
 };
 
 // 安全闸：真发模式下白名单为空 = 什么会话都可能回。默认拒绝启动。
@@ -146,6 +147,23 @@ if (!dryRun && !noSend && whitelist.length === 0 && !flag("allow-all")) {
   console.error("二选一：配置 data/config.json 的 policy.whitelist，或加 --allow-all 明确同意。");
   console.error("先试跑：node tools/daemon.ts --adb \"<adb>\" --once --dry-run");
   process.exit(4);
+}
+
+const IME_AUTO = "mimic.probe/.ProbeIme";
+const IME_USER = arg("ime-restore", "com.android.adbkeyboard/.AdbIME");
+
+async function withAutomationIme<T>(fn: () => Promise<T>): Promise<T> {
+  const before = (await adb.shell("settings get secure default_input_method", 8000)).trim();
+  if (before !== IME_AUTO) {
+    await adb.shell(`ime enable ${IME_AUTO}`, 8000).catch(() => "");
+    await adb.shell(`ime set ${IME_AUTO}`, 8000);
+  }
+  try {
+    return await fn();
+  } finally {
+    const restore = before && before !== IME_AUTO ? before : IME_USER;
+    await adb.shell(`ime set ${restore}`, 8000).catch(() => "");
+  }
 }
 
 const auto = new AutoChat({
@@ -158,8 +176,11 @@ const auto = new AutoChat({
   sendReply: async (text: string) => {
     const skill = registry.get("wechat.send_text");
     if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };
-    const result = await skillsRunner.run(skill, { text });
-    return { ok: result.ok, reason: result.reason };
+    // 只在发送这几秒里把默认输入法切成自建的那个，发完立刻还给用户
+    return withAutomationIme(async () => {
+      const result = await skillsRunner.run(skill, { text });
+      return { ok: result.ok, reason: result.reason };
+    });
   },
   eventLog,
   config: autoCfg,

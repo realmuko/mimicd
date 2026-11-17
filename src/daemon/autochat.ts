@@ -33,6 +33,8 @@ export interface AutoChatConfig {
   forceChat?: string;
   /** 只走流程不真发：允许点击/翻页/读屏，但绝不打字和按发送 */
   noSend?: boolean;
+  /** 前台不是微信时是否把它拉到前台（默认不拉，避免打断人） */
+  allowLaunch?: boolean;
 }
 
 export const DEFAULT_AUTOCHAT: AutoChatConfig = {
@@ -91,7 +93,7 @@ export class AutoChat {
     // 1) 回到列表
     const atList = await this.#ensureList();
     if (!atList) {
-      return { acted: false, reason: "回不到会话列表（可能有浮层/搜索页）", ms: Date.now() - t0 };
+      return { acted: false, reason: "前台不是微信（或回不到列表），本轮跳过", ms: Date.now() - t0 };
     }
 
     // 2) 扫列表：红点 + OCR（先等列表稳定，刚拉起微信时还在加载）
@@ -160,7 +162,7 @@ export class AutoChat {
     const chatArea = rectOf(d.graph, "chat", "message_area", screen.w, screen.h);
     const chatOcr = await d.ocr.recognize(chatShot.png, chatArea);
     const parsed = mergeBubbles(
-      messagesFromOcr(chatOcr.lines, { width: screen.w, meRatio: 0.55, minHeight: 20 }),
+      messagesFromOcr(chatOcr.lines, { width: screen.w, meRatio: 0.55, minHeight: 20, bmp: chatBmp }),
     );
 
     const fresh = d.world.ingest(name, parsed.map((m) => ({ text: m.text, from: m.from, y: m.y, source: "ocr" as const })));
@@ -200,6 +202,13 @@ export class AutoChat {
       return { acted: true, chat: name, replied: false, reason: `脑子出错：${(err as Error).message}`, ms: Date.now() - t0 };
     }
 
+    // 模型可以明确表示「这句不用接」（返回空串），那就真不接
+    if (replyText.trim() === "") {
+      d.eventLog?.append("note", { stage: "brain", chat: name, skip: "empty-reply" }, { src: "brain" });
+      await this.#backToList();
+      return { acted: true, chat: name, replied: false, reason: "模型判断这句不用接", ms: Date.now() - t0 };
+    }
+
     const text = replyText.slice(0, this.#cfg.policy.maxReplyChars ?? 200);
 
     // 8) 发（干跑/不发送模式只记账，不真发）
@@ -234,7 +243,8 @@ export class AutoChat {
       const guess = detectPage(decode(frame.png), await this.#d.device.adb.focus());
       if (guess.page === "list") return true;
       if (guess.page === "other" || guess.page === "unknown") {
-        // 桌面/别的应用/系统弹窗：back 没用，直接拉起微信
+        // 前台不是微信：默认不抢焦点，直接放弃这一轮（人手正在用别的东西）
+        if (!this.#cfg.allowLaunch) return false;
         await this.#d.device.adb.shell("am start -n com.tencent.mm/.ui.LauncherUI", 15000);
         await new Promise((r) => setTimeout(r, 800));
         continue;

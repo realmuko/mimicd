@@ -8,6 +8,7 @@
  */
 
 import type { OcrLine } from "../perception/ocr.ts";
+import type { Bitmap } from "../image/image.ts";
 import type { Side } from "../world/state.ts";
 
 export interface ReadMessage {
@@ -18,6 +19,34 @@ export interface ReadMessage {
   h: number;
 }
 
+/**
+ * 判断这句话是谁说的。
+ *
+ * 只靠左右分边在长气泡上会翻车（长句横跨大半屏，中心点跑到左边），
+ * 所以优先看**气泡底色**：微信里我说的是绿色 (#95EC69)，对方是白色。
+ */
+export function bubbleSide(bmp: Bitmap, line: OcrLine): Side | null {
+  const y = Math.min(bmp.height - 1, Math.max(0, Math.round(line.y + line.h / 2)));
+  const x0 = Math.max(0, Math.round(line.x) - 14);
+  const x1 = Math.min(bmp.width - 1, Math.round(line.x + line.w) + 14);
+  let green = 0;
+  let white = 0;
+  let total = 0;
+  for (let x = x0; x <= x1; x += 2) {
+    const p = (y * bmp.width + x) * 4;
+    const r = bmp.data[p]!;
+    const g = bmp.data[p + 1]!;
+    const b = bmp.data[p + 2]!;
+    total++;
+    if (g > 195 && r > 105 && r < 195 && b < 160) green++;
+    else if (r > 238 && g > 238 && b > 238) white++;
+  }
+  if (total === 0) return null;
+  if (green / total > 0.25) return "me";
+  if (white / total > 0.25) return "other";
+  return null;
+}
+
 export interface ReadOptions {
   /** 屏幕宽，用来算左右 */
   width: number;
@@ -25,6 +54,8 @@ export interface ReadOptions {
   meRatio?: number;
   /** 小于这个字高的行当噪声 */
   minHeight?: number;
+  /** 有截图时优先用气泡颜色判左右 */
+  bmp?: Bitmap;
 }
 
 const TIME_LIKE = /^(\d{1,2}[:：]\d{2}|\d{4}年|\d{1,2}月\d{1,2}日|昨天|今天|前天|上午|下午|凌晨|晚上|中午)/;
@@ -47,13 +78,10 @@ export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessag
     // 纯符号/单字符（OCR 噪声）
     if (text.replace(/[\s\p{P}\p{S}]/gu, "").length === 0) continue;
 
+    const byColor = opts.bmp ? bubbleSide(opts.bmp, line) : null;
     const centerX = line.x + line.w / 2;
-    out.push({
-      text,
-      from: centerX > opts.width * meRatio ? "me" : "other",
-      y: line.y,
-      h: line.h,
-    });
+    const from: Side = byColor ?? (centerX > opts.width * meRatio ? "me" : "other");
+    out.push({ text, from, y: line.y, h: line.h });
   }
 
   out.sort((a, b) => a.y - b.y);

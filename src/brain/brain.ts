@@ -83,8 +83,10 @@ export class HttpBrain implements Brain {
       : `${this.#opts.url.replace(/\/$/, "")}/chat/completions`;
 
     const transcript = ctx.messages
+      .slice(-8)
       .map((m) => `${m.from === "me" ? "我" : m.from === "other" ? "对方" : "系统"}：${m.text}`)
       .join("\n");
+    const last = ctx.messages[ctx.messages.length - 1];
 
     const system =
       this.#opts.system ??
@@ -105,7 +107,7 @@ export class HttpBrain implements Brain {
           max_tokens: this.#opts.maxTokens ?? 120,
           messages: [
             { role: "system", content: system },
-            { role: "user", content: `会话：${ctx.chat}（${ctx.kind ?? "unknown"}）\n${transcript}\n\n直接给出你要回的那一句：` },
+            { role: "user", content: `会话：${ctx.chat}（${ctx.kind ?? "unknown"}）\n${transcript}\n\n最后一条是${last?.from === "me" ? "我" : "对方"}说的。如果最后一条是对方说的，直接给出你要回的那一句；如果是我说的，回复空字符串。` },
           ],
         }),
         signal: controller.signal,

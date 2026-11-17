@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { cleanName, findRedBadges, matchNames, scanList, unreadRows } from "../src/monitor/scan.ts";
-import { mergeBubbles, messagesFromOcr } from "../src/monitor/read.ts";
+import { bubbleSide, mergeBubbles, messagesFromOcr } from "../src/monitor/read.ts";
 
 function blank(w, h, rgb) {
   const data = Buffer.alloc(w * h * 4);
@@ -116,4 +116,31 @@ test("读消息：系统提示与纯符号被过滤", () => {
     { width: 1080 },
   );
   assert.deepEqual(msgs.map((m) => m.text), ["真的吗"]);
+});
+// ---------- 气泡颜色分左右 ----------
+
+function makeBubbleImg(bubbleColor) {
+  const bmp = blank(600, 400, [237, 237, 237]);
+  fill(bmp, { x: 100, y: 150, w: 400, h: 100 }, bubbleColor);
+  return bmp;
+}
+
+test("谁说的：绿色气泡算我，白色算对方（长气泡靠颜色不靠左右）", () => {
+  const line = { text: "这是一句很长很长的话", x: 120, y: 170, w: 360, h: 40 };
+  assert.equal(bubbleSide(makeBubbleImg([149, 236, 105]), line), "me");
+  assert.equal(bubbleSide(makeBubbleImg([255, 255, 255]), line), "other");
+  // 背景色（灰）判不出来，交给左右兜底
+  assert.equal(bubbleSide(blank(600, 400, [237, 237, 237]), line), null);
+});
+
+test("messagesFromOcr：有截图时用颜色判，长气泡不会把「我」判成「对方」", () => {
+  const bmp = makeBubbleImg([149, 236, 105]);
+  const lines = [
+    { text: "在的，刚看到你说的一些很长的话，我忙完马上回你", x: 120, y: 170, w: 360, h: 40 },
+  ];
+  const msgs = messagesFromOcr(lines, { width: 600, bmp });
+  assert.equal(msgs[0].from, "me");
+  // 不给截图时退回左右判定：这条中心点在 300，600 的 55% 是 330 → 会被判成对方（说明颜色判定的必要性）
+  const fallback = messagesFromOcr(lines, { width: 600 });
+  assert.equal(fallback[0].from, "other");
 });
