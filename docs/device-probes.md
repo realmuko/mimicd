@@ -495,3 +495,16 @@ acted=true  replied=false  reason="群里没 @ 我"
 已验证：图片被跳过、不够好玩被跳过、已收藏被跳过、脱离会话会中止（都返回可读的 reason）。
 未验证：**真的长按一张未收藏的表情 → 添加成功**——阿杰 会话里那两张都已经在收藏夹里了，
 没有「未收藏的对方贴纸」可用。等群里来一张新贴纸就能补上这一格。
+
+## 36. 群聊从「必须 @」改成「模型判断」
+
+`policy.groupStrategy`：`mention`（只回 @，旧行为）/ `judge`（没 @ 也放行，标记 `needsJudgment` 交给主模型）。
+- 判定结果带 `needsJudgment`，一路传到 `BrainContext` 和 `PendingItem`；
+- 桥接提示词里会多一句「这是群聊、对方没有 @ 你，只有轮得到你接才回，否则跳过」；
+- 默认仍是 `mention`，改配置切 `judge`。
+
+## 37. 3.0 激活脚本（还没执行）
+
+`node tools/activate-3.0.mjs --adb "<adb>"`：起引擎 daemon（独立进程）→ 置 `bridge.enabled=true` → 停 2.x 轮询。
+**之后必须重启一次 DSH**：桥接代码在插件 `index.js` 里，GUI 的插件页只列内置插件、不能重载用户 bundle。
+回滚：`node tools/activate-3.0.mjs --off`。

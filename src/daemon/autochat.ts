@@ -203,6 +203,7 @@ export class AutoChat {
     const brainCtx: BrainContext = {
       chat: name,
       kind: d.world.chat(name).kind,
+      needsJudgment: decision.needsJudgment,
       messages: d.world.context(name, 12).map((m) => ({ from: m.from, text: m.text })),
     };
 

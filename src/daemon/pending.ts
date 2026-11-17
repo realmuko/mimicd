@@ -19,6 +19,8 @@ export interface PendingItem {
   /** 过期时间：太久没回就别回了，避免翻旧账 */
   expiresAt: number;
   /** 已回复 / 已跳过 */
+  /** 群聊没 @，等主模型判断要不要接 */
+  needsJudgment?: boolean;
   status: "open" | "replied" | "skipped" | "expired";
   reply?: string;
 }
@@ -48,6 +50,7 @@ export class PendingQueue {
       chat: ctx.chat,
       kind: ctx.kind ?? "unknown",
       messages: ctx.messages.map((m) => ({ from: m.from, text: m.text })),
+      needsJudgment: ctx.needsJudgment,
       createdAt: now,
       expiresAt: now + this.#ttlMs,
       status: "open",

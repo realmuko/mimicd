@@ -20,6 +20,8 @@ export interface BrainContext {
   messages: BrainMessage[];
   /** 会话是群还是私聊，影响称呼与语气 */
   kind?: "group" | "dm" | "unknown";
+  /** 群聊里没 @ 我，需要自己判断要不要接话 */
+  needsJudgment?: boolean;
 }
 
 export interface Brain {
@@ -107,7 +109,16 @@ export class HttpBrain implements Brain {
           max_tokens: this.#opts.maxTokens ?? 120,
           messages: [
             { role: "system", content: system },
-            { role: "user", content: `会话：${ctx.chat}（${ctx.kind ?? "unknown"}）\n${transcript}\n\n最后一条是${last?.from === "me" ? "我" : "对方"}说的。如果最后一条是对方说的，直接给出你要回的那一句；如果是我说的，回复空字符串。` },
+            {
+              role: "user",
+              content: [
+                `会话：${ctx.chat}（${ctx.kind ?? "unknown"}）`,
+                transcript,
+                "",
+                `最后一条是${last?.from === "me" ? "我" : "对方"}说的。`,
+                ctx.needsJudgment ? "这是群聊，对方没有 @ 你：只有你觉得这句话适合你接，才回；不想接就回空字符串。" : "如果最后一条是对方说的，直接给出你要回的那一句；如果是我说的，回复空字符串。",
+              ].join("\n"),
+            },
           ],
         }),
         signal: controller.signal,

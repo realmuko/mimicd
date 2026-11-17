@@ -21,8 +21,10 @@ export interface PolicyConfig {
   requireOtherSide: boolean;
   /** 单条回复最长字符数 */
   maxReplyChars: number;
-  /** 群聊里只回 @ 我的 */
-  groupMentionOnly: boolean;
+  /** 群聊策略：mention = 只回 @ 我；judge = 交给主模型判断要不要接话 */
+  groupStrategy: "mention" | "judge";
+  /** 兼容旧配置：等价于 groupStrategy=mention */
+  groupMentionOnly?: boolean;
   /** 我自己的昵称（用于识别 @） */
   selfNames: string[];
 }
@@ -34,13 +36,15 @@ export const DEFAULT_POLICY: PolicyConfig = {
   maxPerHour: 6,
   requireOtherSide: true,
   maxReplyChars: 200,
-  groupMentionOnly: true,
+  groupStrategy: "mention",
   selfNames: [],
 };
 
 export interface Decision {
   reply: boolean;
   reason: string;
+  /** 群聊里没 @、但按 judge 策略放行，让主模型决定说不说 */
+  needsJudgment?: boolean;
 }
 
 export interface DecideInput {
@@ -77,9 +81,14 @@ export function decide(input: DecideInput): Decision {
     }
   }
 
-  if (chat.kind === "group" && cfg.groupMentionOnly) {
+  let needsJudgment = false;
+  if (chat.kind === "group") {
     const mentioned = input.fresh.some((m) => m.from === "other" && mentionsMe(m.text, cfg.selfNames));
-    if (!mentioned) return { reply: false, reason: "群里没 @ 我" };
+    const strategy = cfg.groupMentionOnly === true ? "mention" : cfg.groupStrategy;
+    if (!mentioned) {
+      if (strategy === "mention") return { reply: false, reason: "群里没 @ 我（mention 策略）" };
+      needsJudgment = true;
+    }
   }
 
   if (cfg.requireOtherSide) {
@@ -109,7 +118,7 @@ export function decide(input: DecideInput): Decision {
     return { reply: false, reason: `这一小时已回 ${recent} 条，到上限` };
   }
 
-  return { reply: true, reason: "可以回" };
+  return { reply: true, reason: needsJudgment ? "群里没 @，交给主模型判断" : "可以回", ...(needsJudgment ? { needsJudgment } : {}) };
 }
 
 /** 从会话列表里挑一个该处理的（白名单优先、未读优先）。 */

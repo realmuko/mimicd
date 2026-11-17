@@ -191,3 +191,35 @@ test("策略：群里没 @ 我不回，@ 了就回", () => {
     true,
   );
 });
+
+test("策略：群聊 judge 策略 —— 没 @ 也放行，标记 needsJudgment", () => {
+  const group = chatState({ name: "家庭群", kind: "group" });
+  const d = decide({
+    now: NOON,
+    chat: group,
+    fresh: [fresh("今天谁做饭")],
+    config: { groupStrategy: "judge", selfNames: ["阿鲤"] },
+  });
+  assert.equal(d.reply, true);
+  assert.equal(d.needsJudgment, true);
+  assert.match(d.reason, /交给主模型判断/);
+
+  // mention 策略仍然拦
+  const blocked = decide({
+    now: NOON,
+    chat: group,
+    fresh: [fresh("今天谁做饭")],
+    config: { groupStrategy: "mention", selfNames: ["阿鲤"] },
+  });
+  assert.equal(blocked.reply, false);
+
+  // @ 到了就不需要判断
+  const mentioned = decide({
+    now: NOON,
+    chat: group,
+    fresh: [fresh("@阿鲤 今天谁做饭")],
+    config: { groupStrategy: "judge", selfNames: ["阿鲤"] },
+  });
+  assert.equal(mentioned.reply, true);
+  assert.equal(mentioned.needsJudgment, undefined);
+});
