@@ -279,7 +279,10 @@ const probe = async () => {
 
 /** 进会话：点完必须核对标题，进错/认不出标题一律不发（见 src/daemon/navigate.ts）。 */
 async function enterChat(name: string): Promise<boolean> {
-  const result = await navigateEnterChat({ adb, injector, ocr, graph, log: (m) => console.log(m) }, name);
+  const result = await navigateEnterChat(
+    { adb, injector, ocr, graph, ime, withIme: withAutomationIme, log: (m) => console.log(m) },
+    name,
+  );
   if (!result.ok) {
     console.log(`[enterChat] ${result.reason}`);
     eventLog.append("note", { stage: "enter-chat", chat: name, reason: result.reason ?? null }, { src: "handoff" });

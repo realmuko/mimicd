@@ -49,7 +49,12 @@ const GRAPH = {
   profile: "wechat",
   device: { screen: { w: 1080, h: 2160 } },
   pages: {
-    list: { elements: { list_area: { x: 0, y: 0.06, w: 1, h: 0.86 } } },
+    list: {
+      elements: {
+        list_area: { x: 0, y: 0.06, w: 1, h: 0.86 },
+        search_icon: { x: 0.822, y: 0.041, w: 0.06, h: 0.03 },
+      },
+    },
     chat: {
       elements: {
         message_area: { x: 0, y: 0.08, w: 1, h: 0.86 },
@@ -149,4 +154,86 @@ test("进会话：列表里没有这个会话，直接说清楚", async () => {
   assert.equal(result.ok, false);
   assert.match(result.reason, /列表里没找到/);
   assert.equal(result.attempts, 1);
+});
+/** 假设备：支持「列表 → 搜索 → 搜索结果」那条兜底路。 */
+function makeSearchNav(opts = {}) {
+  const calls = [];
+  const state = { page: "list", titleReads: 0 };
+  const titles = opts.titles ?? ["周末爬山小分队(50)", "周末爬山小分队(50)", "周末爬山小分队(50)", "摸鱼闲聊群(23)"];
+  const typed = [];
+  const device = {
+    adb: {
+      async screencap() {
+        return { png: state.page === "chat" ? CHAT_PNG : LIST_PNG, width: 1080, height: 2160, ms: 5 };
+      },
+      async focus() {
+        return {
+          raw: "",
+          pkg: "com.tencent.mm",
+          activity:
+            state.page === "list"
+              ? "com.tencent.mm.ui.LauncherUI"
+              : state.page === "search"
+                ? "com.tencent.mm.plugin.fts.ui.FTSMainUI"
+                : "com.tencent.mm.ui.chatting.ChattingUI",
+          component: "",
+        };
+      },
+      async shell(cmd) {
+        calls.push(["shell", cmd]);
+        if (cmd.includes("KEYCODE_BACK")) state.page = state.page === "chat" ? "list" : "list";
+        return "";
+      },
+    },
+    injector: {
+      async tap(x, y) {
+        calls.push(["tap", x, y]);
+        if (state.page === "list") state.page = y < 160 ? "search" : "chat"; // 顶部是搜索图标，中间是会话行
+        else if (state.page === "search") state.page = "chat";
+      },
+    },
+    ocr: {
+      async recognize(png, region) {
+        if (state.page === "list" && png === LIST_PNG) {
+          return { lines: opts.listLines ?? LIST_LINES, text: "", ms: 5 };
+        }
+        if (state.page === "chat" && region && region.y < 100) {
+          const t = titles[Math.min(state.titleReads, titles.length - 1)];
+          state.titleReads++;
+          return { lines: t ? [{ text: t, x: 400, y: 80, w: 200, h: 40 }] : [], text: t ?? "", ms: 5 };
+        }
+        if (state.page === "search") {
+          return { lines: [{ text: "摸鱼闲聊群", x: 200, y: 400, w: 400, h: 40 }], text: "", ms: 5 };
+        }
+        return { lines: [], text: "", ms: 5 };
+      },
+    },
+    ime: {
+      async type(text) {
+        typed.push(text);
+      },
+    },
+    withIme: async (fn) => {
+      calls.push(["withIme"]);
+      return fn();
+    },
+    graph: GRAPH,
+  };
+  return { device, calls, state, typed };
+}
+
+test("进会话：列表三次都点错，自动改用搜索框，搜到后核对标题成功", async () => {
+  const { device, calls, typed } = makeSearchNav();
+  const result = await enterChat(device, "摸鱼闲聊群");
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(result.via, "search");
+  assert.deepEqual(typed, ["摸鱼闲聊群"], "搜索框里要打的是会话名");
+  assert.ok(calls.some((c) => c[0] === "withIme"), "打字前后要切/还输入法");
+});
+
+test("进会话：搜索框也找不到就不硬发，把原因说清楚", async () => {
+  const { device } = makeSearchNav({ listLines: [{ text: "张三", x: 200, y: 240, w: 100, h: 40 }] });
+  const result = await enterChat(device, "摸鱼闲聊群");
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /搜索|没找到/);
 });
