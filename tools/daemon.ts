@@ -10,7 +10,7 @@
 import { readFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { Adb } from "../src/device/adb.ts";
+import { Adb, AdbError, classifyDeviceError } from "../src/device/adb.ts";
 import { InjectorClient } from "../src/device/injector.ts";
 import { ImeClient } from "../src/device/ime.ts";
 import { createRng } from "../src/core/rng.ts";
@@ -43,6 +43,8 @@ const adbPath = arg("adb", process.env["ADB_PATH"] ?? "adb");
 const serial = arg("serial");
 const intervalSec = Number(arg("interval", "20"));
 const port = Number(arg("port", "65480"));
+/** 注入器的 TCP 端口（adb forward 过来），重置 adb server 后要重建 */
+const INJECTOR_PORT = 7801;
 const dryRun = flag("dry-run");
 const forceChat = arg("chat", "");
 const noSend = flag("no-send");
@@ -92,11 +94,18 @@ const registry = SkillRegistry.loadDir(skillsDir);
 if (registry.issues.length > 0) console.error("技能问题：\n" + registry.issues.join("\n"));
 
 const adb = new Adb({ adbPath, serial });
-const injector = new InjectorClient({ port: 7801 });
+const injector = new InjectorClient({ port: INJECTOR_PORT });
 const ime = new ImeClient(adb);
 
+// 启动先重置一次 adb server：上一轮如果被强杀 / 超时打断，server 那边可能还挂着楔子，
+// 换一个新的最省事 —— 也就是人手排查时做的那一下。要跳过加 --no-adb-reset。
+if (!flag("no-adb-reset")) {
+  const reset = await adb.recover({ timeoutMs: 20000 });
+  console.log(`[adb] 启动前重置 server：${reset.log}`);
+}
+
 try {
-  await adb.forward(7801, 7801);
+  await adb.forward(INJECTOR_PORT, INJECTOR_PORT);
 } catch (err) {
   console.error(`\n连不上手机：${(err as Error).message}`);
   console.error('先确认 adb devices 能看到设备，再跑 node tools/inject/deploy.ts --adb "<adb>"');
@@ -239,9 +248,24 @@ async function collectPass(): Promise<void> {
   const result = await skillsRunner.run(skill, { funnyThreshold: "0.7" });
   const collected = Boolean((result.outputs["step1"] as { collected?: boolean } | undefined)?.collected);
   eventLog.append("note", { stage: "collect-pass", chat, collected, reason: result.reason ?? null }, { src: "proactive" });
+
+  // 收完离开这个会话，别把界面留在群里：留在群里（尤其是表情面板还开着）时，
+  // 下一轮得先退回列表，浮层一旦认错就会一直空转（2026-11-18 真机撞到过）。
+  // 注意 unknown 也算"没收干净"：表情面板就是被认成 unknown 的那种。
+  for (let i = 0; i < 3; i++) {
+    const g = detectPage(decodeFrame(await adb.screencap()), await adb.focus());
+    if (g.page === "list" || g.page === "other") break;
+    await adb.shell("input keyevent KEYCODE_BACK", 15000).catch(() => Buffer.alloc(0));
+    await new Promise((r) => setTimeout(r, 400));
+  }
 }
 
 let offlineStrikes = 0;
+/** 这一轮掉线是从什么时候开始的（告警里报「已经多久不可用」） */
+let offlineSinceAt = 0;
+/** 上次自动重置 adb server / 上次明确告警的时间 */
+let lastRecoverAt = 0;
+let lastAlertAt = 0;
 
 const auto = new AutoChat({
   device: { adb, injector, ime },
@@ -352,6 +376,48 @@ async function exclusive<T>(label: string, fn: () => Promise<T>, waitMs = 0): Pr
   } finally {
     deviceBusy = false;
     deviceBusyLabel = "";
+  }
+}
+
+// 掉线时的节奏：每 60s 试一次；自动重置 adb server 至少隔 30s；每 5 分钟明确告警一次
+const OFFLINE_RETRY_MS = 60000;
+const RECOVER_MIN_GAP_MS = 30000;
+const ALERT_EVERY_MS = 5 * 60 * 1000;
+
+/** adb server 重置后，注入器的端口转发也跟着没了，得重建（否则触摸链路是哑的） */
+async function restoreForward(): Promise<void> {
+  await adb.forward(INJECTOR_PORT, INJECTOR_PORT);
+}
+
+/**
+ * 掉线时自动重启 adb server（kill-server → start-server → forward）。
+ *
+ * 这一步是「人手排查时唯一有用的一下」：能救 server 卡死、孤儿客户端占设备、
+ * transport 被截断之后残留的 offline —— 也就是这几天反复出现的那些情况。
+ * 设备接口整个不在（手机把 ADB 收走了）时它救不回来，那种只能等人重插线，所以照常告警。
+ */
+async function maybeRecoverDevice(reason: string): Promise<boolean> {
+  const now = Date.now();
+  if (now - lastRecoverAt < RECOVER_MIN_GAP_MS) return false;
+  lastRecoverAt = now;
+  try {
+    // 重置和重建转发放在同一把锁里：中间不能被 tick / 发送插进来（那会抢设备）
+    const r = await exclusive(
+      "adb-recover",
+      async () => {
+        const res = await adb.recover();
+        if (res.ok) {
+          await restoreForward().catch((err: Error) => console.log(`[adb] 端口转发没重建起来：${err.message.slice(0, 120)}`));
+        }
+        return res;
+      },
+      30000,
+    );
+    console.log(`[adb] 自动恢复${r.ok ? "成功" : "失败"}（${reason}）：${r.log}`);
+    return r.ok;
+  } catch (err) {
+    console.log(`[adb] 自动恢复没跑成：${(err as Error).message.slice(0, 160)}`);
+    return false;
   }
 }
 
@@ -596,6 +662,7 @@ async function loop(): Promise<void> {
     if (offlineStrikes > 0) {
       console.log(`[tick] 设备恢复（掉线 ${offlineStrikes} 轮后）`);
       offlineStrikes = 0;
+      offlineSinceAt = 0;
     }
     state.lastTick = { at: Date.now(), acted: result.acted, reason: result.reason, replied: result.replied, chat: result.chat };
     world.save(); // 每轮落盘：强杀进程时也不至于丢光会话状态
@@ -616,18 +683,39 @@ async function loop(): Promise<void> {
     console.log(`[tick] ${new Date().toISOString()} acted=${result.acted} replied=${result.replied ?? false} chat=${result.chat ?? "-"} ${result.reason} (${result.ms}ms)`);
   } catch (err) {
     const message = (err as Error).message;
-    const offline = /no devices|offline|device .*not found/i.test(message);
-    if (offline) {
+    const kind = classifyDeviceError(message);
+    // 命令被我们半路掐断（超时 / 超 buffer）也算掉线：adb server 那边大概率已经卡了
+    const killedMidway = err instanceof AdbError && err.recoverable;
+    if (kind !== "none" || killedMidway) {
       offlineStrikes++;
-      if (offlineStrikes === 1) console.log(`[tick] 设备掉线（第 1 次）：${message.slice(0, 120)} —— 开始每 60s 试一次重连`);
-      if (offlineStrikes % 3 === 1) {
-        await adb.exec(["reconnect", "offline"]).catch(() => {});
+      if (offlineStrikes === 1) {
+        offlineSinceAt = Date.now();
+        console.log(
+          `[tick] 设备掉线（第 1 次，${killedMidway ? "adb 被强杀" : kind}）：${message.slice(0, 140)} —— ` +
+            `每 ${OFFLINE_RETRY_MS / 1000}s 重试，必要时自动重启 adb server`,
+        );
+      }
+      // reconnect 只救「server 还知道这台设备」的情况，先试一下便宜的那步
+      if (kind === "offline") await adb.exec(["reconnect", "offline"]).catch(() => Buffer.alloc(0));
+      // 命令被强杀 → server 大概已经卡了，立刻重置；单纯掉线 → 第 2 轮再动手，别为一次抖动反复 kill
+      if (killedMidway || offlineStrikes >= 2) {
+        const ok = await maybeRecoverDevice(killedMidway ? "命令被强杀" : kind);
+        if (ok) console.log("[tick] adb server 已重置，下一轮应该能连上");
+      }
+      const now = Date.now();
+      if (now - lastAlertAt >= ALERT_EVERY_MS) {
+        lastAlertAt = now;
+        const mins = Math.max(1, Math.round((now - (offlineSinceAt || now)) / 60000));
+        console.log(
+          `[alert] 手机不可用 ${mins} 分钟（第 ${offlineStrikes} 轮）：${message.slice(0, 120)} —— ` +
+            `自动重置救不回来就得人看一眼：USB 线、手机是否亮屏、USB 调试开关`,
+        );
       }
     } else {
       console.log(`[tick] 出错：${message}`);
     }
   }
-  if (!stopping) timer = setTimeout(loop, (offlineStrikes > 0 ? 60 : intervalSec) * 1000);
+  if (!stopping) timer = setTimeout(loop, offlineStrikes > 0 ? OFFLINE_RETRY_MS : intervalSec * 1000);
 }
 
 const shutdown = async () => {
@@ -635,10 +723,14 @@ const shutdown = async () => {
   if (timer) clearTimeout(timer);
   world.save();
   eventLog.close();
+  // 收掉还在跑的 adb 客户端：孤儿 adb.exe 会一直占着设备，下次启动就是「no devices」
+  const killed = await adb.killAllChildren().catch(() => 0);
+  if (killed > 0) console.log(`[adb] 退出前清掉 ${killed} 条 adb 客户端`);
   await daemon.close();
   process.exit(0);
 };
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
+process.on("SIGBREAK", () => void shutdown());
 
 void loop();

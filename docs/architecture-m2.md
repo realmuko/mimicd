@@ -104,7 +104,12 @@
 | 脑子超时/报错 | 记 `note`，本轮不回，不重试 |
 | 发送技能失败 | 记 `send.failed`，不重试（不可撤销） |
 | 注入器掉线 | daemon 启动时自检失败直接退出，不裸跑 |
-| 手机断开 | `adb` 报错 → tick 捕获，下一轮继续 |
+| 手机断开（`no devices` / `offline`） | tick 捕获 → 60s 后重试；第 2 轮起自动 `kill-server` → `start-server` → 重建 `forward`；每 5 分钟打一次 `[alert]` |
+| adb 命令被强杀（超时 / 超 buffer） | 不半路丢流：`spawn` + `taskkill /T /F` 收进程树，错误带 `recoverable`，下一轮立刻重置 server |
+| 引擎退出 / Ctrl+C | 先清掉还在跑的 adb 客户端（孤儿客户端会一直占着设备），再关 HTTP |
+
+> adb 层为什么用 `spawn` 而不是 `execFile`、为什么启动时要先重置一次 server，见 `src/device/adb.ts` 顶部注释。
+> 跳过启动重置：`--no-adb-reset`。
 
 ## 7. 怎么跑
 

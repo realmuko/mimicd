@@ -17,7 +17,7 @@ import { findCardTitle } from "../perception/cards.ts";
 import { findImageBubbles } from "../perception/bubbles.ts";
 import { cleanName, isNameLine, scanList } from "../monitor/scan.ts";
 import { detectChatKind, titleFromOcr, titleMatches } from "../monitor/chat.ts";
-import { decide, pickChat, type PolicyConfig } from "../policy/policy.ts";
+import { decide, pickChat, sameChatName, type PolicyConfig } from "../policy/policy.ts";
 import type { Brain, BrainContext } from "../brain/brain.ts";
 
 import type { World } from "../world/state.ts";
@@ -111,12 +111,34 @@ export class AutoChat {
 
     // 2) 扫列表：红点 + OCR（先等列表稳定，刚拉起微信时还在加载）
     await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000 });
-    const listShot = await d.device.adb.screencap();
-    const listBmp = decode(listShot.png);
     const screen = d.graph.device.screen;
     const listArea = rectOf(d.graph, "list", "list_area", screen.w, screen.h);
-    const listOcr = await d.ocr.recognize(listShot.png, listArea);
-    const scan = scanList(listBmp, listOcr.lines, listArea);
+    const readList = async () => {
+      const shot = await d.device.adb.screencap();
+      const ocr = await d.ocr.recognize(shot.png, listArea);
+      return { ocr, scan: scanList(decode(shot.png), ocr.lines, listArea) };
+    };
+    let { ocr: listOcr, scan } = await readList();
+
+    // 兜底：页面判定说"这是列表"，但列表区域里**读到了字、却一行会话名都没有** —— 那是浮层盖住了。
+    // （一个字都读不到时不动手：可能只是这一帧还没渲染好，乱按返回会把正常的列表也退了。）
+    // 2026-11-18 真机撞到：收藏表情后表情面板留在群里，页面判定把表情网格当成了底部 tab 栏，
+    // 于是每一轮都"列表里没有未读"，群里 @ 了半小时没人回。按返回把它收掉再扫一遍。
+    const noNamesYet = (o: typeof listOcr) => o.lines.length > 0 && !o.lines.some((l) => isNameLine(l));
+    if (scan.rows.length === 0 && noNamesYet(listOcr)) {
+      for (let i = 0; i < 2; i++) {
+        if (scan.rows.length > 0 || !noNamesYet(listOcr)) break;
+        d.eventLog?.append("note", { stage: "scan-empty", recover: "back", attempt: i + 1 }, { src: "monitor" });
+        await d.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+        await new Promise((r) => setTimeout(r, 500));
+        if (!(await this.#ensureList())) break;
+        await waitStable(d.device.adb, { frames: 2, timeoutMs: 3000 });
+        ({ ocr: listOcr, scan } = await readList());
+      }
+      if (scan.rows.length === 0 && noNamesYet(listOcr)) {
+        return { acted: false, reason: "回不到列表（界面被浮层盖住）", ms: Date.now() - t0 };
+      }
+    }
 
     d.eventLog?.append(
       "frame.captured",
@@ -144,7 +166,11 @@ export class AutoChat {
       }
       name = pickChat(scan.rows, (this.#cfg.policy.whitelist ?? []).slice());
       if (!name) return { acted: false, reason: "未读都不在白名单", ms: Date.now() - t0 };
-      rowY = scan.rows.find((r) => r.name === name)!.y;
+      const wanted = name;
+      // pickChat 返回的是白名单里的规范名；列表里那行可能被 OCR 读歪（「以摸鱼…」），按模糊找
+      const row = scan.rows.find((r) => r.name === wanted) ?? scan.rows.find((r) => sameChatName(r.name, wanted));
+      if (!row) return { acted: false, reason: `列表里找不到「${wanted}」`, ms: Date.now() - t0 };
+      rowY = row.y;
     }
 
     // 4) 进去并核对标题。列表在「扫描」和「点击」之间会重排，进错会话必须退回来重试 ——

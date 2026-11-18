@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { InjectorClient, InjectorError } from "../src/device/injector.ts";
 import { ImeClient, ImeError, parseBroadcastResult, parseReadInput, shellQuote } from "../src/device/ime.ts";
-import { parseFocus } from "../src/device/adb.ts";
+import { parseFocus, Adb, AdbError, classifyDeviceError } from "../src/device/adb.ts";
 
 test("注入器：命令格式正确，ok 才算成功", async () => {
   const sent = [];
@@ -161,4 +161,67 @@ test("focus：从 mCurrentFocus 里取包名与活动", () => {
 test("focus：解析不了时给空值，不抛异常", () => {
   const f = parseFocus("  mCurrentFocus=null");
   assert.deepEqual({ pkg: f.pkg, activity: f.activity }, { pkg: "", activity: "" });
+});
+// ---------- adb 掉线自愈：分类 / 强杀 / 残留清理 ----------
+
+async function waitFor(fn, ms = 4000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (fn()) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+}
+
+test("classifyDeviceError：没设备 / 离线 / 没授权 分得开", () => {
+  assert.equal(classifyDeviceError("error: no devices/emulators found"), "no-device");
+  assert.equal(classifyDeviceError("error: device offline"), "offline");
+  assert.equal(classifyDeviceError("error: device unauthorized. Please check the confirmation dialog"), "unauthorized");
+  assert.equal(classifyDeviceError("adb exec-out screencap -p 失败（exit 1）：error: closed"), "none");
+});
+
+test("Adb.exec：走 spawn，正常拿到 stdout", async () => {
+  const adb = new Adb({ adbPath: process.execPath });
+  const out = await adb.exec(["-e", "process.stdout.write('hi')"], 5000);
+  assert.equal(out.toString("utf8"), "hi");
+  assert.equal(adb.liveCount, 0);
+});
+
+test("Adb.exec：超时强杀，错误带 recoverable，且不留子进程", async () => {
+  const adb = new Adb({ adbPath: process.execPath });
+  await assert.rejects(
+    () => adb.exec(["-e", "setTimeout(() => {}, 4000)"], 200),
+    (err) => err instanceof AdbError && err.recoverable === true && err.detail.timedOut === true,
+  );
+  assert.ok(await waitFor(() => adb.liveCount === 0), "子进程应该被收掉");
+  assert.equal(adb.needsRecovery, true);
+  adb.clearRecoveryFlag();
+  assert.equal(adb.needsRecovery, false);
+});
+
+test("Adb.exec：输出超上限强杀，同样标 recoverable", async () => {
+  const adb = new Adb({ adbPath: process.execPath, maxBufferBytes: 16 });
+  await assert.rejects(
+    () => adb.exec(["-e", "process.stdout.write('x'.repeat(4096))"], 5000),
+    (err) => err instanceof AdbError && err.detail.overflow === true,
+  );
+  assert.ok(await waitFor(() => adb.liveCount === 0));
+});
+
+test("Adb.killAllChildren：退出前能把在跑的命令清掉", async () => {
+  const adb = new Adb({ adbPath: process.execPath });
+  const running = adb.exec(["-e", "setTimeout(() => {}, 5000)"], 20000).catch((err) => err);
+  assert.ok(await waitFor(() => adb.liveCount === 1), "命令应该已经在跑");
+  const n = await adb.killAllChildren();
+  assert.equal(n, 1);
+  assert.ok(await waitFor(() => adb.liveCount === 0));
+  const err = await running;
+  assert.ok(err instanceof AdbError, "被清掉的命令应该以 AdbError 收场");
+});
+
+test("Adb.recover：adb 跑不起来时返回失败而不是抛异常", async () => {
+  const adb = new Adb({ adbPath: process.execPath });
+  const r = await adb.recover({ timeoutMs: 3000 });
+  assert.equal(r.ok, false);
+  assert.ok(r.log.length > 0);
 });

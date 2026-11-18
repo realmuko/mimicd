@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_POLICY, decide, pickChat } from "../src/policy/policy.ts";
+import { DEFAULT_POLICY, decide, pickChat, sameChatName } from "../src/policy/policy.ts";
 import { HttpBrain, ScriptedBrain, sanitizeReply } from "../src/brain/brain.ts";
 import { World } from "../src/world/state.ts";
 
@@ -222,4 +222,25 @@ test("策略：群聊 judge 策略 —— 没 @ 也放行，标记 needsJudgment
   });
   assert.equal(mentioned.reply, true);
   assert.equal(mentioned.needsJudgment, undefined);
+});
+
+test("pickChat：名字被 OCR 读歪一点也能对上白名单（返回白名单里的规范名）", () => {
+  const rows = [
+    { name: "周末爬山小分队有2个人领了“", unread: 3 },
+    { name: "以摸鱼闲聊群", unread: 1 }, // 真机：带「有人@我」时多读了一个「以」
+    { name: "南（东）部战区联合陆军第414班", unread: 2 },
+  ];
+  assert.equal(pickChat(rows, ["摸鱼闲聊群"]), "摸鱼闲聊群");
+  assert.equal(pickChat(rows, ["阿杰", "摸鱼闲聊群"]), "摸鱼闲聊群");
+  // 短名字不能只靠「包含」乱配
+  assert.equal(pickChat([{ name: "以群", unread: 1 }], ["群"]), null);
+});
+
+test("sameChatName：空白/标点/多读一个字都算同一个，短名不乱配", () => {
+  assert.equal(sameChatName("摸鱼闲聊群", "摸鱼闲聊群"), true);
+  assert.equal(sameChatName("以摸鱼闲聊群", "摸鱼闲聊群"), true);
+  assert.equal(sameChatName("摸鱼闲聊群 ", " 摸鱼闲聊群"), true);
+  assert.equal(sameChatName("南（东）部战区联合陆军第414班", "南东部战区联合陆军第414班"), true);
+  assert.equal(sameChatName("群A", "群B"), false);
+  assert.equal(sameChatName("", "群A"), false);
 });

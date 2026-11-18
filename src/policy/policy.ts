@@ -121,9 +121,39 @@ export function decide(input: DecideInput): Decision {
   return { reply: true, reason: needsJudgment ? "群里没 @，交给主模型判断" : "可以回", ...(needsJudgment ? { needsJudgment } : {}) };
 }
 
-/** 从会话列表里挑一个该处理的（白名单优先、未读优先）。 */
+/** 会话名归一：去空白与常见标点（OCR 会带进来「[]（）:，」这些）。 */
+function normChatName(text: string): string {
+  return String(text ?? "")
+    .replace(/\s+/g, "")
+    .replace(/[\[\]（）()【】·,，.。:：!！?？]/g, "");
+}
+
+/**
+ * 两个会话名是不是同一个。
+ *
+ * 不能要求一字不差：列表里带「有人@我」时，OCR 实测会把群名读成「以摸鱼闲聊群」，
+ * 严格比较就永远不在白名单里，群里 @ 了也不回（2026-11-18 真机撞到）。
+ */
+export function sameChatName(a: string, b: string): boolean {
+  const x = normChatName(a);
+  const y = normChatName(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  // 只允许"包含"这种容错，且短的那个至少 3 个字，免得一个「以」把什么都匹配上
+  if (x.length >= 3 && y.includes(x)) return true;
+  if (y.length >= 3 && x.includes(y)) return true;
+  return false;
+}
+
+/** 从会话列表里挑一个该处理的（白名单优先、未读优先）。返回白名单里的规范名字。 */
 export function pickChat(rows: Array<{ name: string; unread: number }>, whitelist: string[]): string | null {
-  const pool = whitelist.length > 0 ? rows.filter((r) => whitelist.includes(r.name)) : rows;
-  const unread = pool.filter((r) => r.unread > 0);
-  return (unread[0] ?? pool[0])?.name ?? null;
+  if (whitelist.length === 0) {
+    const unread = rows.filter((r) => r.unread > 0);
+    return (unread[0] ?? rows[0])?.name ?? null;
+  }
+  const matched = rows
+    .map((row) => ({ row, canon: whitelist.find((w) => sameChatName(row.name, w)) ?? null }))
+    .filter((x): x is { row: { name: string; unread: number }; canon: string } => x.canon !== null);
+  const unread = matched.filter((x) => x.row.unread > 0);
+  return (unread[0] ?? matched[0])?.canon ?? null;
 }
