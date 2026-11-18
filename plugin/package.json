@@ -1,0 +1,46 @@
+{
+  "name": "dsh-mimicd-wechat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "DSH 与 mimicd 引擎之间的瘦适配层：wechat_* 工具、待办唤醒桥接、设置页。设备与发送都由引擎负责。",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "wechat",
+    "mimicd",
+    "plugin"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "wechat-mimicd.config.json",
+    "wechat-mimicd.config.example.json"
+  ],
+  "scripts": {
+    "check": "node --check index.js && node --check client.js && node --check lib/config.js && node --check lib/engine.js && node --check lib/format.js && node --check lib/bridge.js && node --check lib/sessions.js && node --check lib/api.js",
+    "test": "node --test \"test/*.test.mjs\"",
+    "selftest": "node --test \"test/*.test.mjs\""
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ],
+      "platform": "web"
+    }
+  }
+}

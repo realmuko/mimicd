@@ -5,12 +5,25 @@
  * 这样 actuator / perception / skills 都能在**没有手机**的情况下测。
  */
 
+import type { Bitmap } from "../image/image.ts";
+
 export interface Frame {
   png: Buffer;
   width: number;
   height: number;
   /** 从发起截图到拿到字节的耗时 */
   ms: number;
+  /**
+   * 这张 PNG 解码后的位图（Adb.screencap 顺手填上）。
+   *
+   * 为什么放在 Frame 里：screencap 为了拿宽高本来就要 decode 一次，
+   * 调用方（perception / monitor）拿到 Frame 又 decode 第二遍 —— 同一帧解两遍，
+   * 1080×2160 大约是每次多 20~30ms 的纯拷贝。有它就别再 decode(frame.png) 了。
+   *
+   * 可选：实现 AdbPort 的假设备（测试里那些）不填也没关系，调用方要写
+   * `frame.bmp ?? decode(frame.png)`。
+   */
+  bmp?: Bitmap;
 }
 
 export interface Focus {
@@ -29,6 +42,20 @@ export interface AdbPort {
   focus(): Promise<Focus>;
   forward(localPort: number, remotePort: number): Promise<void>;
   push(localPath: string, remotePath: string): Promise<void>;
+
+  // ---- 下面这些是可选的「设备自检」能力。假设备（测试里的）不实现也没关系 ----
+  // 只在 Adb 这一层有；用可选成员而不是必选，是为了不把每个 fake 都改一遍。
+
+  /** 手机现在是不是醒着（亮屏且没锁）。读 `dumpsys power` 的 mWakefulness。 */
+  screenAwake?(): Promise<boolean>;
+  /** 微信僵死时重启它（force-stop + monkey 拉起）。重锤，调用方先确认真的卡死了。 */
+  restartWeChat?(opts?: {
+    forceStopWaitMs?: number;
+    launchWaitMs?: number;
+    checkFocus?: boolean;
+  }): Promise<{ ok: boolean; log: string; pkg: string }>;
+  /** 作废截图复用窗口（点/滑/切 App 之后必须调用；waitStable 这类轮询也该每次调用）。 */
+  invalidateFrame?(): void;
 }
 
 export interface InjectorPort {

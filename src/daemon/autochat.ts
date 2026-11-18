@@ -19,6 +19,8 @@ import { cleanName, isNameLine, scanList } from "../monitor/scan.ts";
 import { detectChatKind, titleFromOcr, titleMatches } from "../monitor/chat.ts";
 import { decide, pickChat, sameChatName, type PolicyConfig } from "../policy/policy.ts";
 import type { Brain, BrainContext } from "../brain/brain.ts";
+import { enterChat } from "./navigate.ts";
+import type { ImePort } from "../device/types.ts";
 
 import type { World } from "../world/state.ts";
 import type { Actuator } from "../act/actuator.ts";
@@ -74,6 +76,10 @@ export interface AutoChatDeps {
   collectSticker?: () => Promise<{ ok: boolean; reason?: string }>;
   eventLog?: EventLog;
   config?: Partial<AutoChatConfig>;
+  /** 搜索兜底要打字（navigate.enterChat 用） */
+  ime?: Pick<ImePort, "type">;
+  /** 打字前后切/还输入法（daemon 里的 withAutomationIme） */
+  withIme?: <T>(fn: () => Promise<T>) => Promise<T>;
 }
 
 export class AutoChat {
@@ -162,6 +168,18 @@ export class AutoChat {
       d.eventLog?.append("note", { stage: "force-chat", hit: { text: hit.text, y: hit.y, h: hit.h }, tapY: Math.round(rowY) }, { src: "monitor" });
     } else {
       if (scan.rows.length === 0) {
+        // 没有未读，但可能有「欠着没回」的消息（冷却 / 合并窗口期间攒下的）。
+        // 微信只要进过一次会话就把红点清了，列表扫描永远发现不了它们 —— 不主动回去补发，
+        // 这些消息就再没人理了（旧插件的 flushPending 就是干这个的）。
+        const wl = (this.#cfg.policy.whitelist ?? []).slice();
+        const owed = d.world
+          .listUnsent()
+          .filter((x) => wl.length === 0 || wl.some((n) => sameChatName(n, x.name)));
+        if (owed.length > 0) {
+          this.forceChatOnce = owed[0]!.name;
+          d.eventLog?.append("note", { stage: "unsent-flush", chat: owed[0]!.name, count: owed[0]!.count }, { src: "policy" });
+          return { acted: false, reason: `回去补发「${owed[0]!.name}」欠着的 ${owed[0]!.count} 条`, ms: Date.now() - t0 };
+        }
         return { acted: false, reason: "列表里没有未读", ms: Date.now() - t0 };
       }
       name = pickChat(scan.rows, (this.#cfg.policy.whitelist ?? []).slice());
@@ -173,56 +191,33 @@ export class AutoChat {
       rowY = row.y;
     }
 
-    // 4) 进去并核对标题。列表在「扫描」和「点击」之间会重排，进错会话必须退回来重试 ——
-    //    只看「页面是不是 chat」发现不了（别的群也是 chat），标题是唯一的硬证据。
-    let entered = false;
-    let title: string | null = null;
-    let chatShot: Frame | null = null;
-    let lastWrongTitle: string | null = null;
-    for (let tries = 0; tries < 3; tries++) {
-      let tapY = Math.round(rowY);
-      if (tries > 0) {
-        await this.#ensureList();
-        const again = await d.device.adb.screencap();
-        const againOcr = await d.ocr.recognize(again.png, listArea);
-        const line = againOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(name.replace(/\s+/g, "")));
-        if (!line) break;
-        tapY = Math.round(line.y + line.h / 2);
-      }
-      await d.actuator.tapPoint(this.#cfg.rowTapX, tapY, 60);
-      entered = await this.#waitPage("chat", 6000);
-      if (!entered) continue;
-      await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000 });
-
-      const shot = await d.device.adb.screencap();
-      // 标题只在中间那条带里：整条头栏会把「〈 未读数」也读进来，最长的那行反而不是标题
-      const headerArea = rectOf(d.graph, "chat", "title_strip", screen.w, screen.h);
-      const headerOcr = await d.ocr.recognize(shot.png, headerArea);
-      const got = titleFromOcr(headerOcr.lines);
-      if (!got || titleMatches(name, got)) {
-        title = got;
-        chatShot = shot;
-        break;
-      }
-      lastWrongTitle = got;
-      d.eventLog?.append("note", { stage: "enter-chat", wanted: name, got, tries }, { src: "monitor" });
-      entered = false;
+    // 4) 进去并核对标题：交给 navigate.enterChat。
+    //    以前这里自己内联了点行循环，点不进去就每拍重烧一遍。旧插件的教训是：
+    //    列表在「截图」和「点击」之间会重排，盲点行必踩，所以它早就改成了搜索优先；
+    //    enterChat 现在带「点行失败就转搜索」的兜底，并把 via / attempts 回报出来。
+    const nav = await enterChat(this.#navDeps(), name, { tapX: this.#cfg.rowTapX });
+    if (!nav.ok) {
       await this.#backToList();
+      // 进不去就挂冷却。旧插件的 perChatCooldownSec 就是干这个的：否则这个会话会被
+      // 每一拍重试一次（每次十几张截图），永远出不来，还会一直刷「进错会话」。
+      d.world.patch(name, { cooldownUntil: Date.now() + this.#cfg.perChatCooldownMs });
+      d.eventLog?.append(
+        "note",
+        { stage: "enter-chat-failed", chat: name, reason: nav.reason ?? null, attempts: nav.attempts },
+        { src: "monitor" },
+      );
+      return { acted: false, chat: name, reason: nav.reason ?? "进不去会话", ms: Date.now() - t0 };
     }
+    const title: string | null = nav.title ?? null;
 
-    if (!entered || !chatShot) {
-      await this.#backToList();
-      return {
-        acted: false,
-        chat: name,
-        reason: lastWrongTitle
-          ? `进错会话：想进「${name}」，实际「${lastWrongTitle}」（重试 3 次仍对不上）`
-          : "点了会话行但没进到聊天页（重试后仍失败）",
-        ms: Date.now() - t0,
-      };
-    }
+    // 等画面稳定只看标题栏（静区）：聊天区有动图表情，整帧永远不稳（device-probes 实测）。
+    const headerArea = rectOf(d.graph, "chat", "title_strip", screen.w, screen.h);
+    await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000, region: headerArea });
+    const chatShot: Frame = await d.device.adb.screencap();
 
-    // 5) 顺便定群/私聊
+    // 5) 定群/私聊：标题只是第一条线索，正文里出现 ≥2 个不同发送者才算硬证据
+    //    （world.patch 里保证 group 不会被一次误判降级成 dm —— 旧插件踩过这个坑：
+    //    群被当成私聊 → 没人 @ 也在群里回话）。
     const kind = detectChatKind(title || name);
     d.world.patch(name, { kind });
 
@@ -279,14 +274,26 @@ export class AutoChat {
 
     // 6) 决定
     const now = Date.now();
-    const decision = decide({ now, chat: d.world.chat(name), fresh, config: this.#cfg.policy });
+    // 之前因为冷却 / 静默 / 合并窗口被判「先等等」的消息攒在 world 里（旧插件的 pendingText）。
+    // 不接这一段的话：合并窗口第一拍必然判「再等等」，第二拍 fresh 已经是空，这条消息就永远
+    // 不会再触发了 —— 等于永久丢消息（旧插件当年就是这么丢的，后来专门加了 flushPending）。
+    const unsent = d.world.peekUnsent(name);
+    const decision = decide({ now, chat: d.world.chat(name), fresh, unsent, config: this.#cfg.policy });
     d.eventLog?.append(
       "intent.decided",
-      { chat: name, reply: decision.reply, reason: decision.reason, fresh: fresh.length },
+      { chat: name, reply: decision.reply, reason: decision.reason, fresh: fresh.length, unsent: unsent.length },
       { src: "policy" },
     );
 
     if (!decision.reply) {
+      // 只把「暂时不处理」的攒起来（合并窗口 / 冷却 / 静默）；永久不该回的别进队列，
+      // 否则它们会被每一拍重新判一次，白白烧 OCR 和次数。
+      if (/合并窗口|冷却|静默|补发/.test(decision.reason)) {
+        const queued = d.world.queueUnsent(name, fresh);
+        if (queued > 0) {
+          d.eventLog?.append("note", { stage: "unsent-queued", chat: name, added: queued, reason: decision.reason }, { src: "policy" });
+        }
+      }
       await this.#maybeCollect(name, fresh.length);
       await this.#backToList();
       return { acted: true, chat: name, replied: false, reason: decision.reason, ms: Date.now() - t0 };
@@ -347,9 +354,12 @@ export class AutoChat {
       return { acted: true, chat: name, replied: false, reason: `没发出去：${result.reason ?? "未知原因"}`, ms: Date.now() - t0 };
     }
 
-    const lastOther = [...fresh].reverse().find((m) => m.from === "other");
+    const lastOther = [...fresh, ...unsent].reverse().find((m) => m.from === "other");
     await this.#maybeCollect(name, fresh.length);
-    d.world.markReplied(name, lastOther?.id, Date.now());
+    // 第 4 个参数把自己发的文本也记下来：气泡分边在长引用/合并转发上会判错，
+    // 记下"我说过什么"才能在下次读回来时不把自己当成对方。
+    d.world.markReplied(name, lastOther?.id, Date.now(), text);
+    d.world.takeUnsent(name);
     d.world.patch(name, { cooldownUntil: Date.now() + this.#cfg.perChatCooldownMs });
     d.world.save();
     d.eventLog?.append("send.succeeded", { chat: name, text }, { src: "monitor" });
@@ -403,6 +413,24 @@ export class AutoChat {
       await new Promise((r) => setTimeout(r, 400));
     }
     return false;
+  }
+
+  /** 给 navigate.enterChat 的依赖：actuator 包成 injector.tap，导航日志落事件流 */
+  #navDeps() {
+    const d = this.#d;
+    return {
+      adb: d.device.adb,
+      injector: {
+        tap: async (x: number, y: number, downMs: number) => {
+          await d.actuator.tapPoint(x, y, downMs);
+        },
+      },
+      ocr: d.ocr,
+      graph: d.graph,
+      ime: this.#d.ime,
+      withIme: this.#d.withIme,
+      log: (m: string) => d.eventLog?.append("note", { stage: "nav", msg: m }, { src: "nav" }),
+    };
   }
 
   async #backToList(): Promise<void> {

@@ -25,6 +25,14 @@ export interface PolicyConfig {
   groupStrategy: "mention" | "judge";
   /** 兼容旧配置：等价于 groupStrategy=mention */
   groupMentionOnly?: boolean;
+  /** 合并窗口：真人爱把一句话拆成几条发，窗口内先攒着（旧插件 mergeWindowSec 默认 6 秒） */
+  mergeWindowMs: number;
+  /**
+   * 合并窗口最多拖多久就强制放行（默认 3×window）。
+   * 没有这个上限，对方一直发、每一拍都「刚看到新消息」，就会永远等下去 ——
+   * 旧插件的 pendingText 靠冷却到点才放；这里给一个绝对上限兜底。
+   */
+  maxMergeWaitMs: number;
   /** 我自己的昵称（用于识别 @） */
   selfNames: string[];
 }
@@ -36,7 +44,11 @@ export const DEFAULT_POLICY: PolicyConfig = {
   maxPerHour: 6,
   requireOtherSide: true,
   maxReplyChars: 200,
-  groupStrategy: "mention",
+  // 用户 2026-11-18 明确要求：群聊不再强制靠 @ 开启/维持会话，没 @ 也要自己看着回。
+  // judge = 没 @ 也放行，但打 needsJudgment 让主模型决定接不接（不是静默不回）。
+  groupStrategy: "judge",
+  mergeWindowMs: 6000,
+  maxMergeWaitMs: 18_000,
   selfNames: [],
 };
 
@@ -52,6 +64,11 @@ export interface DecideInput {
   chat: ChatState;
   /** 本轮新看到的消息 */
   fresh: SeenMessage[];
+  /**
+   * 没处理掉的旧消息（冷却/合并窗口里攒下的）。
+   * 不传时会自动读 chat.unsent —— autochat 只要 queueUnsent 就能生效。
+   */
+  unsent?: SeenMessage[];
   config?: Partial<PolicyConfig>;
 }
 
@@ -63,12 +80,36 @@ export function inQuietHours(hour: number, range: [number, number]): boolean {
   return hour >= start || hour < end;
 }
 
+function dedupeById(list: SeenMessage[]): SeenMessage[] {
+  const seen = new Set<string>();
+  const out: SeenMessage[] = [];
+  for (const m of list) {
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    out.push(m);
+  }
+  return out;
+}
+
 export function decide(input: DecideInput): Decision {
   const cfg = { ...DEFAULT_POLICY, ...input.config };
   const chat = input.chat;
   const now = input.now;
 
-  if (input.fresh.length === 0) return { reply: false, reason: "没有新消息" };
+  // T5：上几拍因为冷却/静默/合并窗口没处理掉的消息，和这一拍的新消息合成一批。
+  // 旧插件的教训：冷却期里消息已经进 seen，短窗口预算会把它们抵掉；
+  // 等冷却解除再进会话，微信又清了未读 —— 消息就永久丢了。
+  const unsent = input.unsent ?? chat.unsent ?? [];
+  const pending = dedupeById([...unsent, ...input.fresh]).sort((a, b) => a.firstSeenAt - b.firstSeenAt);
+  const backlog = pending.filter((m) => unsent.some((u) => u.id === m.id)).length;
+
+  /** 拒绝时把「还有几条要补」说清楚，事件流里能看出是丢不了、只是缓一缓。 */
+  const reject = (reason: string): Decision =>
+    backlog > 0 ? { reply: false, reason: `${reason}（补发 ${backlog} 条：先攒着）` } : { reply: false, reason };
+  /** 放行时也标出来：这次不是只回最新一条，是把攒下的一起补。 */
+  const acceptReason = (reason: string): string => (backlog > 0 ? `${reason}（补发 ${backlog} 条）` : reason);
+
+  if (pending.length === 0) return { reply: false, reason: "没有新消息" };
 
   if (cfg.whitelist.length > 0 && !cfg.whitelist.includes(chat.name)) {
     return { reply: false, reason: `「${chat.name}」不在白名单` };
@@ -77,48 +118,74 @@ export function decide(input: DecideInput): Decision {
   if (cfg.quietHours) {
     const hour = new Date(now).getHours();
     if (inQuietHours(hour, cfg.quietHours)) {
-      return { reply: false, reason: `静默时段（${cfg.quietHours[0]}–${cfg.quietHours[1]} 点）` };
+      return reject(`静默时段（${cfg.quietHours[0]}–${cfg.quietHours[1]} 点）`);
     }
   }
 
+  // @ 是强信号：既跳过合并窗口，也不打 needsJudgment（但**不能**跳过下面的防刷屏预算）。
+  let mentioned = false;
   let needsJudgment = false;
   if (chat.kind === "group") {
-    const mentioned = input.fresh.some((m) => m.from === "other" && mentionsMe(m.text, cfg.selfNames));
+    mentioned = pending.some((m) => m.from === "other" && mentionsMe(m.text, cfg.selfNames));
     const strategy = cfg.groupMentionOnly === true ? "mention" : cfg.groupStrategy;
     if (!mentioned) {
-      if (strategy === "mention") return { reply: false, reason: "群里没 @ 我（mention 策略）" };
+      // 旧配置显式写 mention 仍然生效（向后兼容）；groupMentionOnly:true 等价。
+      if (strategy === "mention") return reject("群里没 @ 我（mention 策略）");
       needsJudgment = true;
     }
   }
 
   if (cfg.requireOtherSide) {
-    const last = input.fresh[input.fresh.length - 1]!;
-    if (last.from === "me") return { reply: false, reason: "最后一条是我自己发的" };
-    if (!input.fresh.some((m) => m.from === "other")) {
-      return { reply: false, reason: "这轮没有对方的新消息" };
+    const last = pending[pending.length - 1]!;
+    if (last.from === "me") return reject("最后一条是我自己发的");
+    if (!pending.some((m) => m.from === "other")) {
+      return reject("这轮没有对方的新消息");
     }
   }
 
-  if (chat.repliedTo && input.fresh.every((m) => m.id === chat.repliedTo)) {
-    return { reply: false, reason: "这条已经回过了" };
+  if (chat.repliedTo && pending.every((m) => m.id === chat.repliedTo)) {
+    return reject("这条已经回过了");
   }
 
   if (chat.cooldownUntil > now) {
-    return { reply: false, reason: `会话冷却到 ${new Date(chat.cooldownUntil).toISOString()}` };
+    return reject(`会话冷却到 ${new Date(chat.cooldownUntil).toISOString()}`);
   }
 
   const lastReply = chat.replies[chat.replies.length - 1] ?? 0;
   if (now - lastReply < cfg.minGapMs) {
-    return { reply: false, reason: `距上次回复不足 ${Math.round(cfg.minGapMs / 60000)} 分钟` };
+    return reject(`距上次回复不足 ${Math.round(cfg.minGapMs / 60000)} 分钟`);
   }
 
   const hourAgo = now - 60 * 60 * 1000;
   const recent = chat.replies.filter((t) => t >= hourAgo).length;
   if (recent >= cfg.maxPerHour) {
-    return { reply: false, reason: `这一小时已回 ${recent} 条，到上限` };
+    return reject(`这一小时已回 ${recent} 条，到上限`);
   }
 
-  return { reply: true, reason: needsJudgment ? "群里没 @，交给主模型判断" : "可以回", ...(needsJudgment ? { needsJudgment } : {}) };
+  // T4 合并窗口：真人会把一句话拆几条发，刚看到的最新一条还很「新」时先等等，
+  // 让下一拍把这一波看全再一起回（旧插件 mergeWindowSec 默认 6 秒）。
+  //
+  // 豁免三种，避免永远等下去 / 把该回的不回：
+  //   - 有 @：强信号，立刻放行；群里被点名还等 6 秒没道理。
+  //   - 私聊第一条：对方主动开聊，先接住（真实私聊里很少会拆句拆到需要等的程度）。
+  //   - 已经等够 maxMergeWaitMs：从最早一条待处理消息算，到点必须放行。
+  if (!mentioned && cfg.mergeWindowMs > 0) {
+    const latestOther = [...pending].reverse().find((m) => m.from === "other");
+    const earliestOther = pending.find((m) => m.from === "other");
+    const dmFirst = chat.kind !== "group" && (chat.replies.length ?? 0) === 0;
+    const maxWait = Math.max(cfg.mergeWindowMs, cfg.maxMergeWaitMs || cfg.mergeWindowMs * 3);
+    const waitedEnough = earliestOther ? now - earliestOther.firstSeenAt >= maxWait : false;
+    if (latestOther && !dmFirst && !waitedEnough && now - latestOther.firstSeenAt < cfg.mergeWindowMs) {
+      return reject("合并窗口内，再等等");
+    }
+  }
+
+  const reason = needsJudgment ? "群里没 @，交给主模型判断" : "可以回";
+  return {
+    reply: true,
+    reason: acceptReason(reason),
+    ...(needsJudgment ? { needsJudgment } : {}),
+  };
 }
 
 /** 会话名归一：去空白与常见标点（OCR 会带进来「[]（）:，」这些）。 */

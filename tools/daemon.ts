@@ -290,6 +290,9 @@ const auto = new AutoChat({
   },
   sendReply: async (text: string, chat: string) => sendReply(chat, { text }),
   eventLog,
+  // 搜索兜底要打字：把输入法和切换器交给 autochat，navigate.enterChat 点行失败时会走搜索
+  ime,
+  withIme: withAutomationIme,
   config: autoCfg,
 });
 
@@ -615,7 +618,11 @@ async function readLinkInner(chat: string, which?: number): Promise<{ ok: boolea
 }
 
 const daemon = await startDaemonServer(
-  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, say, allowPendingInject: flag("allow-pending-inject"), exclusive, stickers, token: fileConfig.token },
+  { world, auto, registry, runner: skillsRunner, eventLog, eventFile, state, control, probe, pending, sendReply, readLink, say, allowPendingInject: flag("allow-pending-inject"), exclusive, stickers, token: fileConfig.token,
+    // 交接路径（/pending/reply）发出去之后也要挂同一个冷却，否则引擎自己发和
+    // 主模型发是两套节奏：交接那边不冷却，就会同一会话连着叫醒好几次。
+    perChatCooldownMs: autoCfg.perChatCooldownMs,
+  },
   { port },
 );
 

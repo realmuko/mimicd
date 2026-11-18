@@ -309,7 +309,8 @@ test("自动聊天：群聊没 @ 我 → 读完但不回", async () => {
     graph: GRAPH,
     world,
     brain: new ScriptedBrain({ template: "不该发" }),
-    config: { policy: { quietHours: null, whitelist: [] } },
+    // 这个用例专门验「mention 策略」的旧行为；默认已改成 judge（T6），必须显式写回来
+    config: { policy: { quietHours: null, whitelist: [], groupStrategy: "mention" } },
     sendReply: async () => {
       sent++;
       return { ok: true };
@@ -321,6 +322,47 @@ test("自动聊天：群聊没 @ 我 → 读完但不回", async () => {
   assert.match(result.reason, /群里没 @ 我/, result.reason);
   assert.equal(sent, 0);
   assert.equal(world.chat("家庭群").kind, "group");
+});
+
+test("自动聊天：群聊 judge 策略 —— 没 @ 也挂给主模型判断（不静默）", async () => {
+  const { device } = makeDevice();
+  const root = mkdtempSync(join(tmpdir(), "auto-judge-"));
+  const log = new EventLog({ file: join(root, "run.jsonl"), run: "r-auto-judge" });
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7), eventLog: log });
+  let ctx = null;
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr({
+      list: [{ text: "家庭群", x: 200, y: 240, w: 160, h: 40 }],
+      header: [{ text: "家庭群(5)", x: 400, y: 80, w: 180, h: 40 }],
+      chat: [
+        { text: "今天谁做饭", x: 150, y: 260, w: 300, h: 40 },
+        { text: "又是点外卖吧", x: 150, y: 500, w: 300, h: 40 },
+      ],
+    }),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "不该走本地脑子" }),
+    eventLog: log,
+    config: {
+      // 合并窗口这里关掉：这个用例只看 judge 是否放行（合并窗口另有单测）
+      policy: { quietHours: null, whitelist: [], groupStrategy: "judge", mergeWindowMs: 0 },
+      rowTapX: 300,
+      handoff: async (c) => {
+        ctx = c;
+        return "pending-judge";
+      },
+    },
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.acted, true, result.reason);
+  assert.ok(ctx, "群里没 @ 也要交给主模型判断，不能静默不回");
+  assert.equal(ctx.kind, "group");
+  assert.equal(ctx.needsJudgment, true, "要标 needsJudgment，主模型才知道这句得自己拿主意");
+  assert.match(result.reason, /已挂起等主模型/);
 });
 
 test("自动聊天：对方发的链接卡片标成 [链接]（主模型才知道能点进去读）", async () => {

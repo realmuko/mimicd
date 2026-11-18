@@ -13,8 +13,13 @@ import type { SkillRegistry } from "../skills/registry.ts";
 import type { SkillRunner } from "../skills/runner.ts";
 import type { World } from "../world/state.ts";
 import type { AutoChat } from "./autochat.ts";
-import type { PendingQueue } from "./pending.ts";
+import type { PendingItem, PendingQueue } from "./pending.ts";
 import type { StickerLibrary } from "../stickers/library.ts";
+
+/** 交接回复成功后的每会话冷却：和 DEFAULT_AUTOCHAT.perChatCooldownMs 保持一致 */
+const DEFAULT_HANDOFF_COOLDOWN_MS = 5 * 60 * 1000;
+/** 「这条不接」之后的短冷却：默认 5 分钟 */
+const DEFAULT_SKIP_COOLDOWN_MS = 5 * 60 * 1000;
 
 export interface DaemonState {
   paused: boolean;
@@ -50,6 +55,19 @@ export interface DaemonDeps {
   stickers?: StickerLibrary;
   /** 允许 POST /pending/inject（只在本地测链路时打开） */
   allowPendingInject?: boolean;
+  /**
+   * /pending/reply 成功后给这个会话挂的冷却（毫秒）。
+   * 默认 5 分钟，和 DEFAULT_AUTOCHAT.perChatCooldownMs 一致；装配处可以传
+   * autoCfg.perChatCooldownMs，让「自动回」和「交接回」共用一个节奏。
+   */
+  perChatCooldownMs?: number;
+  /** /pending/skip 之后的短冷却（毫秒），默认 5 分钟 */
+  skipCooldownMs?: number;
+  /**
+   * 交接回复写回世界之后的可选钩子（装配处接：落盘、记账、同步 pending 等）。
+   * 回写本身在 server 里做完了；这个回调只是给 Lead 留的扩展点。
+   */
+  onReplied?: (chat: string, text: string) => void | Promise<void>;
   /** 设备互斥：/intent 也是「碰手机」的动作，必须和 tick 排同一条队 */
   exclusive?: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
   token?: string;
@@ -250,6 +268,35 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const textSent = result.textSent ?? Boolean(text);
       const stickerSent = result.stickerSent ?? (stickerMood !== undefined && !text);
       deps.pending.finish(id, text || `[表情:${stickerMood}]`);
+
+      // T1：交接路径也必须回写世界。
+      // 旧插件的坑：发送走的是「主模型给文本 → 引擎发」，发送成功后没有记 repliedTo / 冷却，
+      // 于是 policy 里 minGapMs、maxPerHour、repliedTo、每会话冷却在产线路径上全部失效 ——
+      // 主模型连着叫几次，引擎就会对着同一条消息回好几次。
+      const sentText = text || `[表情:${stickerMood}]`;
+      const now = Date.now();
+      try {
+        const lastOtherId = latestOtherMessageId(deps.world, item);
+        deps.world.markReplied(item.chat, lastOtherId, now, sentText);
+        deps.world.patch(item.chat, { cooldownUntil: now + (deps.perChatCooldownMs ?? DEFAULT_HANDOFF_COOLDOWN_MS) });
+        deps.world.save();
+        deps.eventLog.append(
+          "note",
+          { stage: "handoff-writeback", chat: item.chat, repliedTo: lastOtherId ?? null, cooldownMs: deps.perChatCooldownMs ?? DEFAULT_HANDOFF_COOLDOWN_MS },
+          { src: "handoff" },
+        );
+      } catch (err) {
+        // 已经发出去了，回写失败不能反过来说「没回成」；落一条事件方便排查
+        deps.eventLog.append("note", { stage: "handoff-writeback", chat: item.chat, error: (err as Error).message }, { src: "handoff" });
+      }
+      if (deps.onReplied) {
+        try {
+          await deps.onReplied(item.chat, sentText);
+        } catch (err) {
+          deps.eventLog.append("note", { stage: "onReplied", chat: item.chat, error: (err as Error).message }, { src: "handoff" });
+        }
+      }
+
       deps.eventLog.append(
         "send.succeeded",
         {
@@ -271,7 +318,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const id = String(body["id"] ?? "");
       const reason = String(body["reason"] ?? "");
       const item = deps.pending?.skip(id);
-      if (item) deps.eventLog.append("intent.skipped", { chat: item.chat, id, reason }, { src: "handoff" });
+      if (item) {
+        deps.eventLog.append("intent.skipped", { chat: item.chat, id, reason }, { src: "handoff" });
+        // 「这条不接」也要挂一个短冷却：否则下一拍又扫到同一条未读，再来问一遍主模型，
+        // 事件流里就是同一个会话每分钟被叫醒一次（旧插件 wakeCooldown 的意义）。
+        const now = Date.now();
+        try {
+          deps.world.patch(item.chat, { cooldownUntil: now + (deps.skipCooldownMs ?? DEFAULT_SKIP_COOLDOWN_MS) });
+          deps.world.save();
+        } catch (err) {
+          deps.eventLog.append("note", { stage: "skip-writeback", chat: item.chat, error: (err as Error).message }, { src: "handoff" });
+        }
+      }
       return item ? send(200, { ok: true, id }) : send(404, { ok: false, error: "没有这个待回复项" });
     }
 
@@ -311,4 +369,18 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   const text = Buffer.concat(chunks).toString("utf8").trim();
   if (!text) return {};
   return JSON.parse(text) as Record<string, unknown>;
+}
+
+/**
+ * 交接回复要记「回到哪条消息」：优先用世界里最近一条对方消息的 id；
+ * 世界还没读到（交接来自别处 / 刚重启）就按待办里的文本反查。都拿不到就返回 undefined
+ * —— markReplied 允许空 id，冷却和回复时间照样记。
+ */
+function latestOtherMessageId(world: World, item: PendingItem): string | undefined {
+  const seen = world.context(item.chat, 60);
+  const lastOther = [...seen].reverse().find((m) => m.from === "other");
+  if (lastOther) return lastOther.id;
+  const lastItemOther = [...(item.messages ?? [])].reverse().find((m) => m.from === "other");
+  if (!lastItemOther?.text) return undefined;
+  return [...seen].reverse().find((m) => m.text === lastItemOther.text)?.id;
 }

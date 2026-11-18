@@ -7,13 +7,21 @@
  * 判据：连通块足够大 + 颜色方差足够高（纯色气泡会被方差挡掉）。
  */
 
-import type { Bitmap, Rect } from "../image/image.ts";
+import { crop, dhash, type Bitmap, type Rect } from "../image/image.ts";
 
 export interface Bubble {
   rect: Rect;
   side: "left" | "right";
   /** 颜色方差（越大越像图片） */
   variance: number;
+  /**
+   * 这张图片气泡的 dHash（16 位 16 进制）。**必须填**。
+   *
+   * 以前这里留空串，于是同一会话里两张不同的图片 dHash 都是 ""，
+   * 下游按「身份」去重时把它们当成同一张 → 第二张被当重复吞掉，
+   * 模型只看到一次 [表情]。dHash 尺度无关（贴纸在面板里 90×150、气泡里 230×310
+   * 也算同一张），正好拿来当图片身份。
+   */
   dhash: string;
 }
 
@@ -160,7 +168,8 @@ export function findImageBubbles(bmp: Bitmap, area: Rect, opts: BubbleOptions = 
         rect: { x: minX, y: minY, w: cw, h: ch },
         side: minX + cw / 2 > bmp.width * 0.55 ? "right" : "left",
         variance: Math.round(variance * 1000) / 1000,
-        dhash: "",
+        // 图片身份：在气泡位图区域上算 dHash（只有认得这一块才认得是哪张图）
+        dhash: dhash(crop(bmp, { x: minX, y: minY, w: cw, h: ch })),
       });
     }
   }

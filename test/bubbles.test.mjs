@@ -72,3 +72,52 @@ test("图片气泡：靠右的判成「我发的」", () => {
   assert.equal(bubbles.length, 1);
   assert.equal(bubbles[0].side, "right");
 });
+// ---------- T4：图片身份（dHash）----------
+
+import { hamming } from "../src/image/image.ts";
+
+/** 按像素函数画一块「图片气泡」 */
+function paint(bmp, rect, fn) {
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      const p = (y * bmp.width + x) * 4;
+      const [r, g, b] = fn(x - rect.x, y - rect.y, rect.w, rect.h);
+      bmp.data[p] = r;
+      bmp.data[p + 1] = g;
+      bmp.data[p + 2] = b;
+    }
+  }
+}
+
+const stripeX = (x, y, w) => [(x * 255) / w, (y * 13) % 255, 180];
+const stripeY = (x, y, w, h) => [200, (y * 255) / h, (x * 7) % 255];
+
+test("图片气泡：dhash 必须填上（空串会让两张不同图片共用同一个身份）", () => {
+  const bmp = blank(1080, 2100, [237, 237, 237]);
+  paint(bmp, { x: 120, y: 300, w: 300, h: 300 }, stripeX);
+  const bubbles = findImageBubbles(bmp, AREA);
+  assert.equal(bubbles.length, 1);
+  assert.match(bubbles[0].dhash, /^[0-9a-f]{16}$/, `dhash 应该是 16 位十六进制，实际「${bubbles[0].dhash}」`);
+});
+
+test("图片气泡：两张不同的图片 dhash 不同（第二张不会被当重复吞掉）", () => {
+  const bmp = blank(1080, 2100, [237, 237, 237]);
+  paint(bmp, { x: 120, y: 300, w: 300, h: 300 }, stripeX);
+  paint(bmp, { x: 120, y: 700, w: 300, h: 300 }, stripeY);
+  const bubbles = findImageBubbles(bmp, AREA);
+  assert.equal(bubbles.length, 2, `应该认出两张图片，实际 ${bubbles.length}`);
+  assert.notEqual(bubbles[0].dhash, bubbles[1].dhash);
+  assert.ok(
+    hamming(bubbles[0].dhash, bubbles[1].dhash) > 10,
+    `两张明显不同的图应该离得很远，实际距离 ${hamming(bubbles[0].dhash, bubbles[1].dhash)}`,
+  );
+});
+
+test("图片气泡：同一张图片出现在两处，dhash 一样（这是它当身份用的前提）", () => {
+  const bmp = blank(1080, 2100, [237, 237, 237]);
+  paint(bmp, { x: 120, y: 300, w: 300, h: 300 }, stripeX);
+  paint(bmp, { x: 620, y: 700, w: 300, h: 300 }, stripeX);
+  const bubbles = findImageBubbles(bmp, AREA);
+  assert.equal(bubbles.length, 2);
+  assert.equal(bubbles[0].dhash, bubbles[1].dhash, "同一张图换个位置，身份不能变");
+});

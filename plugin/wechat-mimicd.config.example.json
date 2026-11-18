@@ -1,0 +1,11 @@
+{
+  "bridge": {
+    "enabled": true,
+    "engineUrl": "http://127.0.0.1:65480",
+    "sessionId": "",
+    "intervalMs": 8000
+  },
+  "tools": {
+    "enabled": true
+  }
+}

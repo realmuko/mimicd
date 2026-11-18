@@ -16,13 +16,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
-import { decode } from "../image/image.ts";
+import { decode, type Bitmap } from "../image/image.ts";
 import type { AdbPort, Focus, Frame } from "./types.ts";
 
 const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 const COMMAND_TIMEOUT = 30000;
 /** 强杀之后最多再等多久收尾，避免 taskkill 没生效时把调用方吊死 */
 const KILL_GRACE_MS = 5000;
+
+/** 微信包名（出镜率太高，各层都用这一个常量，避免拼错） */
+export const WECHAT_PKG = "com.tencent.mm";
 
 export interface AdbErrorDetail {
   /** 超时被杀（命令没跑完就断了，adb server 可能需要重置） */
@@ -75,6 +78,19 @@ export interface AdbOptions {
   serial?: string;
   /** 单条命令最多收多少字节，超了强杀（默认 64MB） */
   maxBufferBytes?: number;
+  /**
+   * 截图复用窗口（毫秒，默认 0 = 关闭）。
+   *
+   * 一次 `exec-out screencap -p` 在真机上 400~700ms，而一拍里经常连着要好几张
+   * （列表 → 进会话 → 读标题 → 读正文，每处都自己拍）。同一 tick 内 300ms 里
+   * 重复调用直接返回上一帧，能把这一拍的连拍次数砍掉一半。
+   *
+   * ⚠ 为什么**默认关**：`waitStable` / `waitScrollSettle` 就是靠「连续几次截图长得一样」
+   * 判稳定的，200ms 间隔加复用窗口会让它们永远拿到同一帧、一上来就判「已稳定」。
+   * 所以复用窗口只应该由编排层（tools/daemon 的 play/tick）在**明确不会连续截图**的
+   * 段落外打开，稳定帧判定里不要开。
+   */
+  captureReuseMs?: number;
 }
 
 interface RunResult {
@@ -89,16 +105,21 @@ export class Adb implements AdbPort {
   readonly adbPath: string;
   readonly serial: string;
   readonly maxBufferBytes: number;
+  /** 截图复用窗口（0 = 不复用，见 AdbOptions.captureReuseMs） */
+  readonly captureReuseMs: number;
 
   /** 正在跑的 adb 子进程（退出时一并清掉，不留孤儿） */
   readonly #live = new Set<ChildProcess>();
   /** 这条命令被我们半路掐断过 → 下次该重置 server */
   #needsRecovery = false;
+  /** 复用窗口里的最近一帧（含拿到它的时刻） */
+  #lastShot: { frame: Frame; at: number } | null = null;
 
   constructor(opts: AdbOptions) {
     this.adbPath = opts.adbPath;
     this.serial = opts.serial ?? "";
     this.maxBufferBytes = opts.maxBufferBytes ?? DEFAULT_MAX_BUFFER;
+    this.captureReuseMs = Math.max(0, opts.captureReuseMs ?? 0);
   }
 
   /** 现在还有几条 adb 命令在跑（测试与退出清理用） */
@@ -251,24 +272,120 @@ export class Adb implements AdbPort {
   }
 
   async shell(cmd: string, timeoutMs = COMMAND_TIMEOUT): Promise<string> {
-    return (await this.exec(["shell", cmd], timeoutMs)).toString("utf8");
+    const out = (await this.exec(["shell", cmd], timeoutMs)).toString("utf8");
+    // 「点了 / 滑了 / 按了 / 切了 App / 输入法改了字」之后，复用窗口里那帧就旧了。
+    // 这不是可选的保险：复用窗口一旦默认打开，忘记失效就会把「点完还是旧画面」
+    // 喂给页面判定，症状和旧插件那次「dumpsys 说在前台、截图却是桌面」一模一样。
+    if (touchesScreen(cmd)) this.invalidateFrame();
+    return out;
   }
 
   async screencap(): Promise<Frame> {
+    // 复用窗口：同一 tick 里连着要截图时，别每条调用都去设备上重拍一张
+    const now = Date.now();
+    if (this.captureReuseMs > 0 && this.#lastShot && now - this.#lastShot.at <= this.captureReuseMs) {
+      return this.#lastShot.frame;
+    }
+
     const t0 = performance.now();
     const png = await this.exec(["exec-out", "screencap", "-p"], 30000);
     const ms = Math.round(performance.now() - t0);
     if (png.length < 8 || png[1] !== 0x50) {
       throw new AdbError(["exec-out", "screencap", "-p"], 0, `返回的不是 PNG（${png.length} 字节）`);
     }
-    const bmp = decode(png);
-    return { png, width: bmp.width, height: bmp.height, ms };
+    // 宽高要从位图里读，所以这里必须解一次；把结果塞回 Frame.bmp，
+    // 调用方（monitor / perception）直接用，不要 `decode(frame.png)` 再解一遍。
+    const bmp: Bitmap = decode(png);
+    const frame: Frame = { png, width: bmp.width, height: bmp.height, ms, bmp };
+    if (this.captureReuseMs > 0) this.#lastShot = { frame, at: Date.now() };
+    return frame;
+  }
+
+  /** 最近一帧（复用窗口里的那张；没有就是 null）。调试用。 */
+  get lastFrame(): Frame | null {
+    return this.#lastShot?.frame ?? null;
+  }
+
+  /** 屏幕已经变了：把复用窗口里的帧丢掉，下一次 screencap 一定重新拍。 */
+  invalidateFrame(): void {
+    this.#lastShot = null;
   }
 
   async focus(): Promise<Focus> {
     const dump = await this.shell("dumpsys window", 20000);
     const line = dump.split("\n").find((l) => l.includes("mCurrentFocus=")) ?? "";
     return parseFocus(line);
+  }
+
+  /**
+   * 手机现在是不是醒着（亮屏且没锁）。
+   *
+   * 旧插件 poller.js:356-363 的经验：锁屏的时候截出来的永远是锁屏壁纸，
+   * 引擎所有「页面判定 / 找红点 / 读消息」都会得出错误结论然后空转一整天。
+   * 所以才在每轮开头先看一眼电源状态，锁着就直接跳过这一拍。
+   *
+   * 查不到（dumpsys 超时 / 输出格式不认识）就当醒着 —— 不能因为一次查询失败
+   * 把整条链路停掉（旧插件同一处也是这么处理的）。
+   */
+  async screenAwake(): Promise<boolean> {
+    try {
+      const dump = await this.shell("dumpsys power", 20000);
+      return parseWakefulness(dump).awake;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * 把微信整个重启一遍（治「dumpsys 说微信在前台、截图却是桌面」的僵死）。
+   *
+   * 旧插件 poller.js:392-407 的实测：华为上会进入一种状态 —— `am start` 只回一句
+   * "intent has been delivered to currently running top-most instance"，按返回也没用，
+   * 微信的窗口还挂在系统里但没真正绘制，于是每拍截到的都是桌面，轮询空转几个小时。
+   * 唯一有效的手段是 `am force-stop` 之后用 monkey 重新拉起。
+   *
+   * ⚠ 这是重锤：调用方必须先确认「确实卡死了」（旧插件是连续 3 次回不到列表才动手），
+   * 认错一次列表页的代价不该是重启微信 —— 重启期间发不出消息、也读不到上下文。
+   *
+   * @param forceStopWaitMs force-stop 之后等多久再拉起（让进程真的死透）
+   * @param launchWaitMs 拉起之后等多久（冷启动实测 5~6 秒才出列表）
+   */
+  async restartWeChat(
+    opts: { forceStopWaitMs?: number; launchWaitMs?: number; checkFocus?: boolean } = {},
+  ): Promise<{ ok: boolean; log: string; pkg: string }> {
+    const forceStopWaitMs = Math.max(0, opts.forceStopWaitMs ?? 1500);
+    const launchWaitMs = Math.max(0, opts.launchWaitMs ?? 6000);
+    const notes: string[] = [];
+
+    try {
+      await this.shell(`am force-stop ${WECHAT_PKG}`, 15000);
+      notes.push("force-stop 已发");
+    } catch (err) {
+      notes.push(`force-stop 失败（${(err as Error).message.slice(0, 80)}）`);
+    }
+    await sleep(forceStopWaitMs);
+
+    try {
+      await this.shell(`monkey -p ${WECHAT_PKG} -c android.intent.category.LAUNCHER 1`, 20000);
+      notes.push("monkey 已拉起");
+    } catch (err) {
+      notes.push(`monkey 失败（${(err as Error).message.slice(0, 80)}）`);
+    }
+    await sleep(launchWaitMs);
+
+    // 不拿 focus 当"起来了没有"的唯一证据（这台机器上 focus 会撒谎），
+    // 只把它记进日志给调用方参考；ok = 命令都发出去了，且（如果查了）焦点看起来是微信。
+    let pkg = "";
+    const checkFocus = opts.checkFocus !== false;
+    if (checkFocus) {
+      try {
+        pkg = (await this.focus()).pkg;
+      } catch {
+        /* 查不到就算了 */
+      }
+    }
+    notes.push(checkFocus ? (pkg === WECHAT_PKG ? "焦点回到微信" : `焦点=${pkg || "未知"}`) : "未检查焦点");
+    return { ok: checkFocus ? pkg === WECHAT_PKG : true, log: notes.join("；"), pkg };
   }
 
   async forward(localPort: number, remotePort: number): Promise<void> {
@@ -332,6 +449,42 @@ export class Adb implements AdbPort {
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 这条 shell 命令会不会改动屏幕（点了 / 滑了 / 按了 / 切了 App / 输入法改了字）。
+ * 会的话，截图复用窗口里的那一帧就过期了，必须丢。
+ */
+export function touchesScreen(cmd: string): boolean {
+  const c = String(cmd ?? "");
+  if (/(^|[\s;&|])input\s/.test(c)) return true;
+  if (/keyevent/i.test(c)) return true;
+  if (/(^|[\s;&|])am\s+(start|force-stop|broadcast|instrument)/.test(c)) return true;
+  if (/(^|[\s;&|])monkey\s/.test(c)) return true;
+  if (/(^|[\s;&|])wm\s+(size|density)/.test(c)) return true;
+  return false;
+}
+
+/**
+ * 从 `dumpsys power` 里读电源状态。纯函数，方便单测。
+ *
+ * 这台机器（BKL-AL20 / Android 10）的输出长这样，`mWakefulness=` 每行在 ActivityManager 段
+ * 也会重复出现，所以只认第一处带值的：
+ *   mWakefulness=Awake
+ *   mWakefulness=Asleep
+ * 旧插件 poller.js:356-363 把 Awake 与 Dreaming 都算醒着（Dreaming = 屏保/微光模式，
+ * 这时候截图是黑的但系统认为"醒着"，真锁屏是 Asleep）。这里沿用。
+ */
+export function parseWakefulness(dump: string): { awake: boolean; state: string } {
+  const text = String(dump ?? "");
+  // 优先取 PowermanagerService 段的那一行（`mWakefulness=` 大写 W），没有就退回宽松匹配
+  const m = /mWakefulness=(\w+)/.exec(text);
+  if (!m) return { awake: true, state: "" }; // 认不出来就当醒着：别把整条链路停掉
+  const state = m[1]!;
+  const awake = state === "Awake" || state === "Dreaming";
+  return { awake, state };
 }
 
 /**

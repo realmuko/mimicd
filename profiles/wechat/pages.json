@@ -47,6 +47,32 @@
         }
       }
     },
+    "search": {
+      "detect": {
+        "kind": "activity",
+        "activity": "com.tencent.mm.plugin.fts.ui.FTSMainUI",
+        "signature": "顶部搜索框 + 下面结果列表（没有 tab 栏、没有输入栏）"
+      },
+      "elements": {
+        "search_field": {
+          "x": 0.18,
+          "y": 0.055,
+          "w": 0.66,
+          "h": 0.038
+        },
+        "results_area": {
+          "x": 0,
+          "y": 0.12,
+          "w": 1,
+          "h": 0.8
+        }
+      },
+      "notes": [
+        "搜索框会保留上一次的查询：不清空就直接打字会拼成垃圾串（旧插件 core.openChat 踩过，连按 25 次退格清）",
+        "结果里优先精确匹配：搜索是模糊的，「阿鲤」会先搜出「钓鱼群」",
+        "search_field 中心取旧插件 wechat-usb.config.json 的 searchField（570,160）/1080×2160"
+      ]
+    },
     "chat": {
       "detect": {
         "kind": "pixel",
@@ -132,6 +158,12 @@
           "y": 0.03,
           "w": 0.5,
           "h": 0.05
+        },
+        "mention_tag": {
+          "x": 0,
+          "y": 0.048,
+          "w": 1,
+          "h": 0.13
         }
       }
     },

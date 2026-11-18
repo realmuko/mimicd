@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { cleanName, findRedBadges, matchNames, scanList, unreadRows } from "../src/monitor/scan.ts";
+import { cleanName, findRedBadges, matchNames, rowCenter, scanList, unreadRows } from "../src/monitor/scan.ts";
 import { bubbleSide, mergeBubbles, messagesFromOcr } from "../src/monitor/read.ts";
 
 function blank(w, h, rgb) {
@@ -160,4 +160,66 @@ test("列表扫描：没有红点、只有「有人@我」的行也算未读", (
   assert.equal(scan.rows.length, 1);
   assert.equal(scan.rows[0].name, "摸鱼闲聊群");
   assert.equal(scan.rows[0].unread, 1);
+});
+
+// ---------- T1：行落点 = 该行所有 OCR 行的并集外接框中心 ----------
+
+test("名字匹配：y 是整行（名字+预览+时间）并集框的中心，不是红点中心", () => {
+  const rows = [{ y: 258, badge: { x: 120, y: 240, w: 36, h: 36, area: 1000 } }];
+  const lines = [
+    { text: "36", x: 122, y: 240, w: 30, h: 30 }, // 红点里的未读数字：240..270
+    { text: "摸鱼闲聊群", x: 200, y: 240, w: 400, h: 40 }, // 240..280
+    { text: "[有人@我] 突然发个表情包什么意思", x: 200, y: 300, w: 700, h: 36 }, // 300..336
+  ];
+  const matched = matchNames(lines, rows);
+  assert.equal(matched.length, 1);
+  // 并集 240..336 → 中心 288。红点中心是 258（偏上 30px），拿它点会落到上一行
+  assert.equal(matched[0].y, 288, "落点要用整行并集框中心（红点中心偏上）");
+});
+
+test("名字匹配：只有一行时，中心就是这个 OCR 行的中心", () => {
+  const rows = [{ y: 250, badge: { x: 120, y: 240, w: 36, h: 36, area: 1000 } }];
+  const lines = [{ text: "张三", x: 200, y: 240, w: 120, h: 40 }];
+  const matched = matchNames(lines, rows);
+  assert.equal(matched[0].y, 260);
+});
+
+test("rowCenter：空数组给 0，不抛", () => {
+  assert.equal(rowCenter([]), 0);
+});
+
+// ---------- T5：界面噪声 ----------
+
+test("读消息：浮层横幅 / [16条] / 列表按钮 / 星期X 都当噪声", () => {
+  const noise = [
+    "微信：刚刚",
+    "微信: 你看下",
+    "[16条]",
+    "16条",
+    "查看更多消息",
+    "查看更早消息",
+    "回到顶部",
+    "收起",
+    "展开",
+    "星期三",
+    "周三",
+    "昨天 12:22",
+    "早上 8:15",
+    "12:22",
+  ];
+  const lines = noise.map((text, i) => ({ text, x: 150, y: 100 + i * 60, w: 400, h: 40 }));
+  assert.deepEqual(messagesFromOcr(lines, { width: 1080 }), [], "这些都不该被当成聊天内容");
+});
+
+test("读消息：正常聊天内容不能被噪声正则误伤", () => {
+  const keep = [
+    "展开说说你的想法", // 句首是「展开」，但不是整行只有「展开」
+    "星期三去爬山吧",
+    "本周三见",
+    "我以为你走了",
+    "微信上聊", // 没有冒号，不是横幅
+  ];
+  const lines = keep.map((text, i) => ({ text, x: 150, y: 100 + i * 60, w: 400, h: 40 }));
+  const msgs = messagesFromOcr(lines, { width: 1080 });
+  assert.deepEqual(msgs.map((m) => m.text), keep);
 });

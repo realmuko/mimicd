@@ -211,5 +211,6 @@ export function detectPage(bmp: Bitmap, focus: Focus): PageGuess {
 }
 
 export function decodeFrame(frame: Frame): Bitmap {
-  return decode(frame.png);
+  // Frame.bmp 是 Adb.screencap 顺手解好的（同一帧不要解两遍）；假设备没填才自己解
+  return frame.bmp ?? decode(frame.png);
 }

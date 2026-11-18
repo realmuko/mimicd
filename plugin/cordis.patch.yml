@@ -1,0 +1,9 @@
+# dsh-mimicd-wechat — mimicd 引擎的瘦适配层
+# 注册 wechat_engine_status / wechat_reply_pending / wechat_skip_pending / wechat_say /
+# wechat_stickers / wechat_chats / wechat_read_link，
+# 并把引擎的 /pending 桥接成 DSH 会话唤醒（schedule.create）。
+# 引擎地址、唤醒会话、轮询间隔见 wechat-mimicd.config.json。
+- insert:
+    - id: dsh-mimicd-wechat
+      name: dsh-mimicd-wechat
+      config: {}

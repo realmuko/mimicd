@@ -129,8 +129,31 @@ export function unreadRows(badges: Badge[], rowTolerance = 40): UnreadRow[] {
 }
 
 /**
+ * 一组 OCR 行的**并集外接框的垂直中心**（点击落点用）。
+ *
+ * 为什么不用红点中心：红点在头像右上角，比整行中心偏上半个行高；
+ * 拿它当 y 去点是「点在这一行的上沿」，稍微一重排就落到上一行去了。
+ * 一行里所有 OCR 行（时间 / 名字 / 预览 / [3条]）的并集框才是这一行的真实范围。
+ */
+export function rowCenter(lines: ReadonlyArray<OcrLine>): number {
+  if (lines.length === 0) return 0;
+  let top = Number.POSITIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+  for (const l of lines) {
+    if (l.y < top) top = l.y;
+    const b = l.y + l.h;
+    if (b > bottom) bottom = b;
+  }
+  return Math.round((top + bottom) / 2);
+}
+
+/**
  * 把未读行对上 OCR 出来的会话名。
  * 规则：取该行附近（±rowTolerance）最靠上的一条 OCR 文本，且不是时间/预览。
+ *
+ * 返回的 `y` 是**这一行所有 OCR 行的并集外接框中心**（不再是红点中心 —— 偏上）。
+ * 旧插件的教训：截图到点击之间列表会重排，落点越接近行中心，点到隔壁的概率越小；
+ * 红点中心比行中心高 ~40px，正好落在上一行的下沿。
  */
 export function matchNames(lines: OcrLine[], rows: UnreadRow[], rowTolerance = 60): ListRow[] {
   const out: ListRow[] = [];
@@ -143,7 +166,7 @@ export function matchNames(lines: OcrLine[], rows: UnreadRow[], rowTolerance = 6
     candidates.sort((a, b) => b.h - a.h || a.y - b.y);
     const name = cleanName(candidates[0]!.text);
     if (!name) continue;
-    out.push({ y: row.y, name, unread: 1 });
+    out.push({ y: rowCenter(nearby), name, unread: 1 });
   }
   return out;
 }

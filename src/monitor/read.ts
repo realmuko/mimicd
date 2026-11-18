@@ -62,8 +62,35 @@ export interface ReadOptions {
   group?: boolean;
 }
 
-const TIME_LIKE = /^(\d{1,2}[:：]\d{2}|\d{4}年|\d{1,2}月\d{1,2}日|昨天|今天|前天|上午|下午|凌晨|晚上|中午)/;
+/**
+ * 时间分隔行。旧插件 poller.js:225-231 的 NOISE_LINE 比这里多几条，都补上了：
+ *  - 「星期X / 周X」：微信整点分隔会写成「星期三」这种，一条数字都不带；
+ *    **整行锚定**（`^…$`）：聊天里说「星期一我们去吧」是内容，只有一行只有「星期三」才算分隔行；
+ *  - 「早上 / 傍晚 / 深夜」：旧表里只有上午/下午/凌晨/晚上/中午，实测还有「早上 8:15」；
+ *  - 「昨天 12:22」「前天 12:22」：以「昨天/前天」开头的行本来就是旧表的判据，保留。
+ * 其余分支只认**句首**（`^`），不认句中 —— 句中的时间词是正常聊天内容。
+ */
+const TIME_LIKE =
+  /^(\d{1,2}[:：]\d{2}|\d{4}年|\d{1,2}月\d{1,2}日|昨天|今天|前天|上午|下午|凌晨|晚上|中午|早上|傍晚|深夜|(星期|周)[一二三四五六日天]$)/;
+
+/**
+ * 系统提示（句中匹配）：撤回、入群、拍一拍、@我提示……
+ * 这些出现在气泡上方，且任何位置出现都不像正常聊天内容。
+ */
 const SYSTEM_LIKE = /(以下为新消息|撤回|加入了群聊|邀请.*加入|被移出|拍了拍|对方正在输入|有人\s*[@＠]\s*我)/;
+
+/**
+ * 界面噪声（旧插件 poller.js:154-163 的 UI_NOISE）：**整行锚定**。
+ *
+ * 补这几条是因为真机上它们会被 OCR 当消息读进来：
+ *  - 「微信：刚刚」这类是**浮层横幅**（不是聊天内容，出现在屏幕顶部）；
+ *  - 「[16条]」是会话预览里的未读数，整行只有它；
+ *  - 「查看更多消息 / 回到顶部 / 查看更早消息 / 收起 / 展开」是列表与浮层上的按钮文字。
+ * 全部用 `^...$` 整行锚定：聊天里说「展开说说」「回到顶部那段」是正常内容，
+ * 只要不是一行只有这几个字就不算噪声 —— 这就是「别误伤正常聊天内容」的边界。
+ */
+const UI_NOISE =
+  /^(微信\s*[:：].*|\[?\d+\s*条\]?|查看更多消息|查看更早消息|回到顶部|收起|展开|以下是新消息|以下为新消息)$/;
 
 export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessage[] {
   const meRatio = opts.meRatio ?? 0.55;
@@ -81,7 +108,7 @@ export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessag
     // 根本不知道是群里哪个人说的，接话自然就接不准。
     // 现在收下来，挂到它下面那条消息上；时间、系统提示、纯数字仍然丢掉。
     if (line.h < 34 && line.x < opts.width * 0.25) {
-      if (opts.group && !/^\d+$/.test(text) && !TIME_LIKE.test(text) && !SYSTEM_LIKE.test(text)) {
+      if (opts.group && !/^\d+$/.test(text) && !TIME_LIKE.test(text) && !SYSTEM_LIKE.test(text) && !UI_NOISE.test(text)) {
         pendingSender = text;
       }
       continue;
@@ -89,6 +116,8 @@ export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessag
     if (/^\d+$/.test(text)) continue;
     if (TIME_LIKE.test(text)) continue;
     if (SYSTEM_LIKE.test(text)) continue;
+    // 界面噪声（浮层横幅 / [16条] / 查看更多消息 …），整行锚定，不会误伤聊天内容
+    if (UI_NOISE.test(text)) continue;
     // 纯符号/单字符（OCR 噪声）
     if (text.replace(/[\s\p{P}\p{S}]/gu, "").length === 0) continue;
 
