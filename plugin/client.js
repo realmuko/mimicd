@@ -249,14 +249,14 @@ window.__ModuleLoader__.load({
       // 每个会话一行：左边名字，右边挑一个 DSH 会话（空 = 用默认唤醒会话）
       const chatSessionRows = chatSessionNames.map((name) => h("div", {
         key: name,
-        style: { display: "flex", alignItems: "center", gap: 8 },
+        style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0 },
       },
         h("span", {
           style: { width: 168, flex: "none", fontSize: 12, wordBreak: "break-all", opacity: 0.8 },
           title: name,
         }, name),
         h("select", {
-          style: { ...S.select, flex: 1 },
+          style: { ...S.select, flex: 1, minWidth: 0, maxWidth: "100%" },
           value: (cfg.bridge?.chatSessions || {})[name] || "",
           onChange: (e) => patchDraft((c) => {
             const map = { ...(c.bridge?.chatSessions || {}) };
