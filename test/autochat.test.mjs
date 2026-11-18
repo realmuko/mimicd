@@ -394,6 +394,63 @@ test("自动聊天：交给主模型的是这一拍要补的那批，不是「�
   );
 });
 
+test("自动聊天：群名被 OCR 读歪、标题也没成员数 → 靠「≥2 个发送者」判成群", async () => {
+  const { device } = makeDevice();
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr({
+      list: [{ text: "周末爬山小分队有2个人领了", x: 200, y: 240, w: 300, h: 40 }],
+      header: [{ text: "102 个好兄弟 ．领了 50 人份", x: 400, y: 80, w: 360, h: 40 }],
+      chat: [
+        { text: "阿瓜", x: 150, y: 260, w: 60, h: 26 }, // 昵称行：小字、靠左
+        { text: "在吗", x: 150, y: 300, w: 120, h: 40 },
+        { text: "BX", x: 150, y: 500, w: 50, h: 26 },
+        { text: "在的", x: 150, y: 540, w: 100, h: 40 },
+      ],
+    }),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "收到" }),
+    config: { policy: { quietHours: null, whitelist: ["周末爬山小分队"] }, rowTapX: 300 },
+    sendReply: async () => ({ ok: true }),
+  });
+
+  const result = await auto.tick();
+  assert.equal(result.chat, "周末爬山小分队", result.reason);
+  const chat = world.chat("周末爬山小分队");
+  assert.equal(chat.kind, "group", "有 ≥2 个发送者就是群，不能一直按私聊处理");
+  const senders = new Set((chat.seen || []).map((m) => m.sender).filter(Boolean));
+  assert.ok(senders.size >= 2, `发送者要拆出来：${[...senders].join("/")}`);
+});
+
+test("自动聊天：私聊里「注意：…」这种句子不能被当作群昵称拆坏", async () => {
+  const { device } = makeDevice();
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr({
+      chat: [
+        { text: "注意：明天带伞", x: 150, y: 260, w: 240, h: 40 },
+        { text: "好", x: 700, y: 500, w: 60, h: 40 },
+      ],
+    }),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "收到" }),
+    config: { policy: { quietHours: null, whitelist: [] }, rowTapX: 300 },
+    sendReply: async () => ({ ok: true }),
+  });
+
+  await auto.tick();
+  const texts = (world.chat("张三").seen || []).map((m) => m.text);
+  assert.ok(texts.includes("注意：明天带伞"), `私聊正文不能被拆：${texts.join(" / ")}`);
+});
+
 test("自动聊天：进错会话就退出，不回", async () => {
   const { device } = makeDevice();
   const world = new World();

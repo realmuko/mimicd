@@ -300,9 +300,23 @@ export class AutoChat {
     const chatBmp: Bitmap = chatShot.bmp ?? decode(chatShot.png);
     const chatArea = rectOf(d.graph, "chat", "message_area", screen.w, screen.h);
     const chatOcr = await d.ocr.recognize(chatShot.png, chatArea);
+    // 群聊昵称行 /「昵称：内容」都要认出来。问题是「这是不是群」本身就靠标题判断，
+    // 而标题会被 OCR 读歪（真机：群名「周末爬山小分队…」读成「…领了 50 人份（1）」，
+    // 判不出成员数 → 当成私聊 → 昵称不拆 → 永远攒不出「≥2 个发送者」的判群证据，
+    // 于是一直按私聊回话，群聊策略（judge/@）全不生效）。
+    // 所以先按群读，再用「同一屏 ≥2 个不同发送者」当证据；证据不足就原样拼回去。
     const parsed = mergeBubbles(
-      messagesFromOcr(chatOcr.lines, { width: screen.w, meRatio: 0.55, minHeight: 20, bmp: chatBmp, group: kind === "group" }),
+      messagesFromOcr(chatOcr.lines, { width: screen.w, meRatio: 0.55, minHeight: 20, bmp: chatBmp, group: true }),
     );
+    const distinctSenders = new Set(parsed.map((m) => m.sender).filter(Boolean));
+    if (kind !== "group" && distinctSenders.size < 2) {
+      // 私聊里偶尔有「注意：明天……」这种句子被拆成昵称，证据不够就把前缀拼回正文
+      for (const m of parsed) {
+        if (!m.sender) continue;
+        m.text = `${m.sender}：${m.text}`;
+        delete m.sender;
+      }
+    }
 
     // 图片/表情气泡没有文字，OCR 出来是空白 —— 主模型会以为对方什么都没发。
     // 标成 [表情]，它才知道「刚才那个是个表情」，也才有可能用表情接表情。
