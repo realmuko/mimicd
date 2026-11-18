@@ -45,6 +45,9 @@ test("交接回复成功 → 回写 repliedTo / replies / 冷却 / 自己说过�
   const dir = mkdtempSync(join(tmpdir(), "handoff-world-"));
   const world = new World({ file: join(dir, "world.json") });
   const [seen] = world.ingest("张三", [{ text: "在吗", from: "other", y: 500, source: "ocr" }]);
+  // 欠账里还有一条模型没看过的（不能跟着一起删）
+  const [unseen] = world.ingest("张三", [{ text: "没给模型看过的另一句", from: "other", y: 700, source: "ocr" }]);
+  world.queueUnsent("张三", [seen, unseen]);
 
   const queue = new PendingQueue();
   const item = queue.add({ chat: "张三", kind: "dm", messages: [{ from: "other", text: "在吗" }] });
@@ -62,12 +65,14 @@ test("交接回复成功 → 回写 repliedTo / replies / 冷却 / 自己说过�
     assert.equal(r.status, 200);
 
     const chat = world.chat("张三");
-    assert.equal(chat.repliedTo, seen.id, "要记回到哪一条（交接路径以前完全没写）");
+    assert.equal(chat.repliedTo, unseen.id, "要记回到最后一条对方消息（交接路径以前完全没写）");
     assert.equal(chat.replies.length, 1, "回复时间要进 replies，minGap/maxPerHour 才有依据");
     assert.ok(chat.cooldownUntil >= before + 120_000 - 2000, "每会话冷却要按配置写上");
     assert.equal(chat.lastFrom, "me");
     assert.equal((chat.ownReplies ?? []).at(-1).text, "在的");
     assert.equal(queue.list().length, 0);
+    // 回过的那条要从欠账里删掉，否则下一拍又被捞出来问一遍；没看过的一条留着
+    assert.deepEqual(world.peekUnsent("张三").map((m) => m.text), ["没给模型看过的另一句"]);
   } finally {
     await d.close();
   }

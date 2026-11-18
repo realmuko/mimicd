@@ -279,7 +279,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
         const lastOtherId = latestOtherMessageId(deps.world, item);
         deps.world.markReplied(item.chat, lastOtherId, now, sentText);
         deps.world.patch(item.chat, { cooldownUntil: now + (deps.perChatCooldownMs ?? DEFAULT_HANDOFF_COOLDOWN_MS) });
+        // 回过的消息要从待补发队列里删掉：不清的话下一拍又当欠账捞出来问一遍 ——
+        // 真机上同一个群的 9 条刚回完，下一轮又「补发 9 条」跑去问主模型。
+        const shown = new Set(item.messages.map((m) => `${m.from}\u0000${m.text}`));
+        const cleared = deps.world.dropUnsent(item.chat, (m) => shown.has(`${m.from}\u0000${m.text}`));
         deps.world.save();
+        if (cleared > 0) {
+          deps.eventLog.append("note", { stage: "handoff-clear-unsent", chat: item.chat, cleared }, { src: "handoff" });
+        }
         deps.eventLog.append(
           "note",
           { stage: "handoff-writeback", chat: item.chat, repliedTo: lastOtherId ?? null, cooldownMs: deps.perChatCooldownMs ?? DEFAULT_HANDOFF_COOLDOWN_MS },
