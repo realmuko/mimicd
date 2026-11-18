@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { PendingBridge, formatPendingPrompt, pickNewItems } from "../lib/bridge.js";
+import { PendingBridge, formatPendingPrompt, pickNewItems, resolveChatSession } from "../lib/bridge.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -57,6 +57,7 @@ test("prompt：群聊显示「昵称：内容」、不要求 @、带工具和待
   const prompt = formatPendingPrompt(item, { 无语: 2 });
 
   assert.match(prompt, /其他人名字就是发这句话的人/);
+  assert.match(prompt, /别把别的群\/私聊里的事带进来/, "要写明不串话题");
   assert.match(prompt, /阿瓜：在吗/);
   assert.match(prompt, /BX：你看这个/);
   assert.match(prompt, /我：在/);
@@ -179,7 +180,39 @@ test("看门狗：超过 stallMs 才复位，复位后下一轮能照常跑", as
 
 test("没配 sessionId 时 wake 给出明确错误", async () => {
   const bridge = new PendingBridge({ engine: fakeEngine([]), sessionId: "", schedule: fakeSchedule() });
-  await assert.rejects(() => bridge.wake(pendingItem("x")), /bridge\.sessionId/);
+  await assert.rejects(() => bridge.wake(pendingItem("x")), /唤醒会话/);
+});
+
+test("会话对齐：精确 / 前缀 / 取最长命中，没有命中就是空", () => {
+  const map = {
+    "摸鱼闲聊群": "session-aaa",
+    "周末爬山小分队": "session-bbb",
+    "周末爬山小分队摸鱼": "session-ccc",
+  };
+  assert.equal(resolveChatSession(map, "摸鱼闲聊群"), "session-aaa");
+  // 手机上群名被截断（OCR 只到前面几个字）也要能对上
+  assert.equal(resolveChatSession(map, "周末爬山小分队有2个人领了红包"), "session-bbb");
+  // 两个都包含时取更长的那个
+  assert.equal(resolveChatSession(map, "周末爬山小分队摸鱼群"), "session-ccc");
+  assert.equal(resolveChatSession(map, "陌生群"), "");
+  assert.equal(resolveChatSession({ "周末爬山小分队": "" }, "周末爬山小分队"), "");
+});
+
+test("wake 按会话对齐表选目标会话；没配专属会话就用默认", async () => {
+  const schedule = fakeSchedule();
+  const bridge = new PendingBridge({
+    engine: fakeEngine([]),
+    sessionId: "session-default",
+    chatSessions: { "周末爬山小分队": "session-zhihu" },
+    schedule,
+  });
+
+  await bridge.wake(pendingItem("a", { chat: "周末爬山小分队有2个人领了红包" }));
+  await bridge.wake(pendingItem("b", { chat: "摸鱼闲聊群" }));
+
+  const targets = schedule.calls.map((args) => JSON.stringify(args[0]));
+  assert.match(targets[0], /session-zhihu/, "有专属会话就发给它");
+  assert.match(targets[1], /session-default/, "没有专属会话用默认");
 });
 
 test("启动日志写明轮询间隔、叫醒超时、看门狗", async () => {

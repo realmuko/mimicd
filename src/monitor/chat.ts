@@ -58,6 +58,27 @@ export function titleFromOcr(lines: OcrLine[]): string {
 }
 
 /**
+ * 最长公共子串的长度（只用于很短的标题核对，O(n·m) 无所谓）。
+ * OCR 常把标题开头/结尾吃掉一两个字，包含匹配就失效了，只能退到这一步。
+ */
+function longestCommonLength(a: string, b: string): number {
+  if (!a || !b) return 0;
+  let best = 0;
+  let prev = new Array<number>(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = new Array<number>(b.length + 1).fill(0);
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        cur[j] = (prev[j - 1] ?? 0) + 1;
+        if (cur[j]! > best) best = cur[j]!;
+      }
+    }
+    prev = cur;
+  }
+  return best;
+}
+
+/**
  * 进入的会话是不是我们要的那一个（宽松包含匹配）。
  *
  * 必须加长度下限：只做包含判断时，白名单里的短名「阿鲤」会匹配上「钓鱼群(23)」，
@@ -70,7 +91,13 @@ export function titleMatches(wanted: string, got: string): boolean {
   if (!a || !b) return false;
   if (a === b) return true;
   if (a.length < MIN_FUZZY_LEN || b.length < MIN_FUZZY_LEN) return false;
-  return b.includes(a) || a.includes(b);
+  if (b.includes(a) || a.includes(b)) return true;
+  // 包含也失配时，按最长公共子串再给一次机会：手机上标题会被「〈 返回」挤掉开头一两个字
+  // （真机：群名「周末爬山小分队…」标题读成「102 个好兄弟…领了 50 人份」，
+  //  于是每轮都判「进错会话」，进不去就挂冷却 —— 这个群永远回不了）。
+  // 条件仍然不宽：公共部分要覆盖 wanted 的 60% 以上，短名照样要求完全相等。
+  const lcs = longestCommonLength(a, b);
+  return lcs >= Math.max(MIN_FUZZY_LEN, Math.ceil(a.length * 0.6));
 }
 
 /**

@@ -49,6 +49,7 @@ mimicd（独立进程，独占手机）            DSH
     "enabled": true,
     "engineUrl": "http://127.0.0.1:65480",
     "sessionId": "",
+    "chatSessions": { "周末爬山小分队": "session-…" },
     "intervalMs": 8000
   },
   "tools": { "enabled": true }
@@ -57,7 +58,11 @@ mimicd（独立进程，独占手机）            DSH
 
 - `enabled`：桥接总开关。
 - `engineUrl`：工具和桥接都用它；只支持 `http(s)://`。
-- `sessionId`：被叫醒的 DSH 会话 id；**空 = 不叫醒任何会话**（工具照常可用）。
+- `sessionId`：默认被叫醒的 DSH 会话 id；**空 = 不叫醒任何会话**（工具照常可用）。
+- `chatSessions`：**会话对齐表**，`{ "群名或前缀": "会话 id" }`。命中的群只叫醒它自己的会话，
+  别的群的消息不会混进同一条对话里（用户要求「不串话题」）。匹配先精确再按包含，取最长命中；
+  手机上群名会被截断，所以写开头几个字就够（≥4 字）。值留空 = 这个群回到默认会话。
+  设置页「会话对齐」一行一个群，下拉选会话。
 - `intervalMs`：轮询 `/pending` 的间隔，2000–120000，默认 8000。
 - `tools.enabled=false`：`wechat_*` 调用直接报错，桥接也不会启动（唤醒后没有回话工具）。
 

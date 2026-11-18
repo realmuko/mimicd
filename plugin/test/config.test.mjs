@@ -45,3 +45,20 @@ test("未知字段不会写进结果", () => {
 test("tools.enabled 可以关掉", () => {
   assert.equal(mergeConfig(DEFAULT_CONFIG, { tools: { enabled: false } }).tools.enabled, false);
 });
+test("会话对齐表：只收像会话 id 的值；空值 = 清掉（回到默认会话）", () => {
+  const cfg = mergeConfig(DEFAULT_CONFIG, {
+    bridge: {
+      chatSessions: {
+        "周末爬山小分队": "session-abc123",
+        "摸鱼闲聊群": "  ",
+        "坏值": "not a session id!!",
+        "": "session-x",
+      },
+    },
+  });
+  assert.equal(cfg.bridge.chatSessions["周末爬山小分队"], "session-abc123");
+  assert.equal(cfg.bridge.chatSessions["摸鱼闲聊群"], "");
+  assert.equal(cfg.bridge.chatSessions["坏值"], undefined, "不像会话 id 的直接丢掉");
+  assert.equal(cfg.bridge.chatSessions[""], undefined, "空群名丢掉");
+  assert.deepEqual(Object.keys(cfg.bridge.chatSessions).sort(), ["周末爬山小分队", "摸鱼闲聊群"].sort());
+});

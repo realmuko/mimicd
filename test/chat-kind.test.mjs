@@ -62,3 +62,15 @@ test("@ 检测：@昵称 与「有人@我」都算", () => {
   assert.equal(mentionsMe("在吗", ["阿鲤"]), false);
   assert.equal(mentionsMe("@阿鲤", []), false, "没有昵称配置时不能瞎认");
 });
+test("标题核对：OCR 吃掉开头一两个字时，按最长公共子串也能认（真机「周末爬山小分队」）", () => {
+  // 列表里是「周末爬山小分队有2个人领了…」，进群后标题栏只读到「102 个好兄弟 … 领了 50 人份（1）」
+  assert.equal(
+    titleMatches("周末爬山小分队", "102 个好兄弟 “ ．领了 50 人份（1）"),
+    true,
+    "公共部分「102个好兄弟」够长，要认成同一个群",
+  );
+  // 但不能宽到把别的群认进来：公共部分覆盖不足还是不认
+  assert.equal(titleMatches("摸鱼闲聊群", "另一个完全不同的群(23)"), false);
+  assert.equal(titleMatches("家庭群", "家庭群(23)"), true);
+  assert.equal(titleMatches("阿鲤", "钓鱼群(23)"), false, "短名仍然必须完全相等");
+});

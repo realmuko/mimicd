@@ -243,6 +243,31 @@ window.__ModuleLoader__.load({
       const events = ov?.events || [];
       const stickers = ov?.stickers || { total: 0, moods: {} };
       const cfg = draft || ov?.config || { bridge: {}, tools: {} };
+      // 会话对齐的候选：引擎见过的会话 + 白名单里的（白名单里可能有还没进过的群）
+      const chatSessionNames = [...new Set([...(chats || []).map((c) => c.name), ...(policy.whitelist || [])])]
+        .filter(Boolean);
+      // 每个会话一行：左边名字，右边挑一个 DSH 会话（空 = 用默认唤醒会话）
+      const chatSessionRows = chatSessionNames.map((name) => h("div", {
+        key: name,
+        style: { display: "flex", alignItems: "center", gap: 8 },
+      },
+        h("span", {
+          style: { width: 168, flex: "none", fontSize: 12, wordBreak: "break-all", opacity: 0.8 },
+          title: name,
+        }, name),
+        h("select", {
+          style: { ...S.select, flex: 1 },
+          value: (cfg.bridge?.chatSessions || {})[name] || "",
+          onChange: (e) => patchDraft((c) => {
+            const map = { ...(c.bridge?.chatSessions || {}) };
+            if (e.target.value) map[name] = e.target.value;
+            else delete map[name];
+            c.bridge = { ...(c.bridge || {}), chatSessions: map };
+          }),
+        },
+          h("option", { value: "" }, "（用上面的默认唤醒会话）"),
+          sessions.map((s) => h("option", { key: s.id, value: s.id },
+            `${s.title || shortId(s.id)} · ${baseName(s.cwd) || "?"} · ${rel(s.lastAt)}`)))));
 
       const online = Boolean(engine.online);
       const running = Boolean(bridge.running);
@@ -422,6 +447,13 @@ window.__ModuleLoader__.load({
               : null,
             sessions.map((s) => h("option", { key: s.id, value: s.id },
               `${s.title || shortId(s.id)} · ${baseName(s.cwd) || "?"} · ${rel(s.lastAt)}`)))),
+        h(Row, { label: "会话对齐" },
+          h("div", { style: { flex: 1, minWidth: 0, display: "grid", gap: 6 } },
+            chatSessionRows.length === 0
+              ? h("span", { style: { opacity: 0.55, fontSize: 12 } }, "还没有会话记录（引擎跑几轮就有了）")
+              : chatSessionRows)),
+        h("div", { style: S.note },
+          "给某个群单独指定一个 DSH 会话：这个群的消息只叫醒那个会话，两个群就不会混进同一条对话里。名字按前缀匹配（手机上群名会被截断，写开头几个字就够）。留空 = 用默认会话。"),
         h(Row, { label: "启用工具" },
           h("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" } },
             h("input", {

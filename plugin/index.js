@@ -115,12 +115,17 @@ function startBridge(reason = "") {
     bridge = new PendingBridge({
       engine: makeEngine(cfg),
       sessionId: cfg.bridge.sessionId,
+      chatSessions: cfg.bridge.chatSessions ?? {},
       schedule: scheduleRef,
       intervalMs: cfg.bridge.intervalMs,
       log,
     });
     bridge.start();
-    log(`桥接已启动${suffix}：会话 ${String(cfg.bridge.sessionId).slice(0, 12)} · 引擎 ${cfg.bridge.engineUrl}`);
+    const mapped = Object.values(cfg.bridge.chatSessions ?? {}).filter(Boolean).length;
+    log(
+      `桥接已启动${suffix}：默认会话 ${String(cfg.bridge.sessionId).slice(0, 12)}` +
+        `${mapped ? ` · ${mapped} 个群有专属会话` : ""} · 引擎 ${cfg.bridge.engineUrl}`,
+    );
   } catch (err) {
     bridge = null;
     log(`桥接启动失败：${err?.message || err}`);
@@ -147,6 +152,7 @@ function bridgeView() {
     reason,
     configEnabled: Boolean(cfg.bridge?.enabled),
     sessionId: cfg.bridge?.sessionId || "",
+    chatSessions: cfg.bridge?.chatSessions ?? {},
     intervalMs: cfg.bridge?.intervalMs || 8000,
     scheduleAvailable: Boolean(scheduleRef),
     ...(st
@@ -307,7 +313,11 @@ function buildService() {
     },
     async saveConfig(patch) {
       const saved = saveConfig(patch);
-      log(`设置页保存配置：bridge.enabled=${saved.cfg.bridge.enabled} · intervalMs=${saved.cfg.bridge.intervalMs} · tools.enabled=${saved.cfg.tools.enabled}`);
+      const mapped = Object.values(saved.cfg.bridge.chatSessions ?? {}).filter(Boolean).length;
+      log(
+        `设置页保存配置：bridge.enabled=${saved.cfg.bridge.enabled} · intervalMs=${saved.cfg.bridge.intervalMs} · tools.enabled=${saved.cfg.tools.enabled}` +
+          `${mapped ? ` · ${mapped} 个群有专属会话` : ""}`,
+      );
       restartBridge("设置页保存配置");
       return { path: saved.path, mtime: saved.mtime, config: saved.cfg };
     },

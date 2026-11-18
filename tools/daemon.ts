@@ -143,7 +143,9 @@ const handoffMode = fileConfig.brain?.kind === "handoff";
 const pending = handoffMode ? new PendingQueue() : undefined;
 /** 群聊「交给主模型判断」的次数上限：群里一直有人在聊时，不该每轮都叫醒一次模型 */
 const judgmentTimes = new Map<string, number[]>();
-const MAX_JUDGMENTS_PER_HOUR = 20; // 用户 2026-11-17：群里可以多接点话
+// 用户 2026-11-18：上限放多一点 —— 反正主模型已经开始思考了，发不发只是执行；
+// 真正的闸是 policy.maxPerHour（每条消息都要过），这里只防「同一个群把人叫太多次」。
+const MAX_JUDGMENTS_PER_HOUR = 60;
 
 const brain: Brain =
   handoffMode

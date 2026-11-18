@@ -54,6 +54,9 @@ export function formatPendingPrompt(item, moods = null) {
   const lines = [];
 
   lines.push(`会话：${item?.chat ?? "?"}（${kindLabel}）`);
+  // 上下文隔离：同一个 DSH 会话可能同时接几个群的消息（或者你带着上一个群的记忆），
+  // 不写死这条，主模型很容易把别处的话题带进来（2026-11-18 用户明确要求不串话题）。
+  lines.push("这条只属于上面这个会话：别把别的群/私聊里的事带进来，也别在这里提别处的聊天内容。");
   lines.push(
     item?.kind === "group"
       ? "最近的对话（「我」是你；其他人名字就是发这句话的人，接话时可以对上人）："
@@ -128,9 +131,39 @@ export function pickNewItems(seen, items) {
   return out;
 }
 
+/** 会话名归一：去空白与常见标点（列表 OCR 会带进来这些）。 */
+function normChat(text) {
+  return String(text ?? "")
+    .replace(/\s+/g, "")
+    .replace(/[\[\]（）()【】·,，.。:：!！?？]/g, "");
+}
+
+/**
+ * 从「会话对齐表」里找这个会话该用哪个 DSH 会话。
+ * 先精确匹配，再按包含匹配（手机上群名会被截断，映射一般写前缀），取最长命中。
+ * 纯函数，方便单测。
+ */
+export function resolveChatSession(chatSessions, chat) {
+  const want = normChat(chat);
+  if (!want) return "";
+  let best = null;
+  for (const [key, sid] of Object.entries(chatSessions || {})) {
+    if (!sid) continue;
+    const k = normChat(key);
+    if (!k) continue;
+    if (k === want) return sid;
+    if (k.length >= 4 && (want.includes(k) || k.includes(want))) {
+      if (!best || k.length > best.len) best = { len: k.length, sid };
+    }
+  }
+  return best?.sid ?? "";
+}
+
 export class PendingBridge {
   #engine;
   #sessionId;
+  /** 会话对齐表：群名（或前缀）→ 会话 id；命中时优先用，避免多个群混进同一条对话 */
+  #chatSessions = {};
   #schedule;
   #intervalMs;
   #wakeTimeoutMs;
@@ -160,6 +193,7 @@ export class PendingBridge {
   constructor({
     engine,
     sessionId,
+    chatSessions = {},
     schedule,
     intervalMs = 8000,
     wakeTimeoutMs = WAKE_TIMEOUT_MS,
@@ -170,6 +204,7 @@ export class PendingBridge {
     if (!engine || typeof engine.pending !== "function") throw new Error("桥接缺少 engine（要能调 pending/stickers）");
     this.#engine = engine;
     this.#sessionId = String(sessionId || "");
+    this.#chatSessions = chatSessions && typeof chatSessions === "object" ? { ...chatSessions } : {};
     this.#schedule = schedule || null;
     this.intervalMs = Math.max(2000, Math.min(120000, Number(intervalMs) || 8000));
     this.#intervalMs = this.intervalMs;
@@ -184,6 +219,7 @@ export class PendingBridge {
     return {
       running: Boolean(this.#timer),
       sessionId: this.#sessionId,
+      chatSessions: { ...this.#chatSessions },
       intervalMs: this.#intervalMs,
       wakeTimeoutMs: this.#wakeTimeoutMs,
       stallMs: this.#stallMs,
@@ -208,11 +244,27 @@ export class PendingBridge {
     return true;
   }
 
+  /** 会话对齐表热更新（设置页保存后调用）。 */
+  setChatSessions(map) {
+    this.#chatSessions = map && typeof map === "object" ? { ...map } : {};
+    return true;
+  }
+
+  /** 这条待办该叫醒哪个会话：先看会话对齐表，再退回默认会话。 */
+  sessionFor(chat) {
+    return resolveChatSession(this.#chatSessions, chat) || this.#sessionId;
+  }
+
   /** 叫醒一次会话；返回 schedule 的结果（失败抛错）。 */
   async wake(item) {
     const schedule = this.#schedule;
     if (!schedule || typeof schedule.create !== "function") throw new Error("schedule 服务不可用");
-    if (!this.#sessionId) throw new Error("没有配置 bridge.sessionId（设置页里选一个要唤醒的 DSH 会话）");
+    // 会话对齐：这个群有专属会话就用它，否则退回默认会话。
+    // 两个群共用一个会话时，主模型会把两个群的话混在一起（用户明确要求不能串话题）。
+    const targetSession = this.sessionFor(item?.chat);
+    if (!targetSession) {
+      throw new Error("没有配置唤醒会话（设置页里选默认会话，或给这个群指定专属会话）");
+    }
 
     let moods = null;
     try {
@@ -227,7 +279,7 @@ export class PendingBridge {
       title: `微信消息 · ${item.chat}`,
       prompt,
       timing: { kind: "at", at },
-      target: { kind: "session", sessionId: this.#sessionId },
+      target: { kind: "session", sessionId: targetSession },
     };
 
     try {
@@ -240,7 +292,7 @@ export class PendingBridge {
       // 超时的场合不要再用旧签名重试：create 可能只是慢，再叫一次等于重复唤醒。
       if (/叫醒超时/.test(String(err?.message))) throw err;
       return await withTimeout(
-        schedule.create(this.#sessionId, { title: modern.title, prompt, at }),
+        schedule.create(targetSession, { title: modern.title, prompt, at }),
         this.#wakeTimeoutMs,
         `叫醒超时（旧签名）：${Math.round(this.#wakeTimeoutMs / 1000)}s 内 schedule.create 没返回`,
       );
@@ -272,7 +324,10 @@ export class PendingBridge {
           this.#attempts.delete(item.id);
           this.#wakes++;
           this.#lastWakeAt = Date.now();
-          this.#log(`已叫醒会话处理「${item.chat}」（${String(item.id).slice(0, 8)}）`);
+          // 记上叫醒的是哪个会话：多群对齐后，排查「串话题」第一眼看的就是这个
+          const target = this.sessionFor(item.chat);
+          const tag = target === this.#sessionId ? "" : "（专属会话）";
+          this.#log(`已叫醒会话处理「${item.chat}」（${String(item.id).slice(0, 8)}）${tag} → ${String(target).slice(0, 20)}`);
           this.#onEvent({ type: "wake", id: item.id, chat: item.chat });
           woke++;
         } catch (err) {

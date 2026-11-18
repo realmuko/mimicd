@@ -24,6 +24,12 @@ export const DEFAULT_CONFIG = {
     enabled: true,
     engineUrl: "http://127.0.0.1:65480",
     sessionId: "",
+    /**
+     * 会话对齐：{ "<群名或前缀>": "<DSH 会话 id>" }。
+     * 某个群有专属会话时，它的待办只叫醒那个会话 —— 两个群的消息不会混进同一条对话里。
+     * 空字符串 = 这个群用默认唤醒会话（bridge.sessionId）。
+     */
+    chatSessions: {},
     intervalMs: 8000,
   },
   tools: {
@@ -81,6 +87,23 @@ export function mergeConfig(base, patch = {}) {
     }
     // sessionId 允许清空（空的 = 不叫醒任何会话）
     if (typeof b.sessionId === "string") out.bridge.sessionId = b.sessionId.trim();
+    // 会话对齐表：群名 → 会话 id。值不像会话 id 的直接丢掉，免得写坏配置
+    if (b.chatSessions && typeof b.chatSessions === "object" && !Array.isArray(b.chatSessions)) {
+      const map = {};
+      for (const [rawChat, rawSid] of Object.entries(b.chatSessions)) {
+        const chat = String(rawChat ?? "").trim().slice(0, 80);
+        const sid = String(rawSid ?? "").trim();
+        if (!chat) continue;
+        if (!sid) {
+          map[chat] = ""; // 显式清空 = 回到默认会话
+          continue;
+        }
+        if (!/^[A-Za-z0-9._:-]{6,80}$/.test(sid)) continue;
+        map[chat] = sid;
+        if (Object.keys(map).length >= 30) break;
+      }
+      out.bridge.chatSessions = map;
+    }
     if (b.intervalMs !== undefined) {
       out.bridge.intervalMs = clampInt(b.intervalMs, 2000, 120000, out.bridge.intervalMs);
     }
