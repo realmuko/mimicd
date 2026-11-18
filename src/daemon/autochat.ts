@@ -181,8 +181,16 @@ export class AutoChat {
       // 「欠着没回」的消息（冷却 / 合并窗口期间攒下的）。微信只要进过一次会话就把红点清了，
       // 列表扫描永远发现不了它们 —— 不主动回去补发，这些消息就再没人理了
       // （旧插件的 flushPending 就是干这个的）。
-      const owedFirst = () =>
-        d.world.listUnsent().find((x) => wl.length === 0 || wl.some((n) => sameChatName(n, x.name)));
+      const owedFirst = () => {
+        const chats = d.world.snapshot().chats ?? {};
+        return d.world.listUnsent().find((x) => {
+          if (!(wl.length === 0 || wl.some((n) => sameChatName(n, x.name)))) return false;
+          // 还在会话冷却里就先别回去：进去了 policy 也只会再判一次「冷却中，先攒着」，
+          // 白白多一轮进会话 + 十几张截图（真机每 20 秒重复撞到过一次）。
+          const cooldown = chats[x.name]?.cooldownUntil ?? 0;
+          return cooldown <= Date.now();
+        });
+      };
 
       // 回去补发：靠 forceChatOnce 下一拍定向进这个会话（定向模式不要求红点）。
       const flushOwed = (): TickResult => {

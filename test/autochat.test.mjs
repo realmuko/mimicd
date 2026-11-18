@@ -315,6 +315,38 @@ test("自动聊天：欠着的会话名被 OCR 读歪 → 归一化到白名单�
   assert.equal(world.peekUnsent("以张三丰").length, 0, "歪名字下不能留，否则会一直重复补");
 });
 
+test("自动聊天：欠账还在冷却里时不去补（别每拍白进一次会话）", async () => {
+  const { device } = makeDevice();
+  const plain = blank(1080, 2160, [237, 237, 237]);
+  for (let i = 0; i < 4; i++) {
+    fill(plain, { x: Math.round(1080 * (0.06 + i * 0.25)), y: 2045, w: 100, h: 40 }, [40, 40, 40]);
+  }
+  const plainPng = encode(plain);
+  device.adb.screencap = async () => ({ png: plainPng, width: 1080, height: 2160, ms: 10 });
+  const ocr = { async recognize() { return { lines: [], text: "", ms: 1 }; } };
+
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr,
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain(),
+    config: { policy: { quietHours: null, whitelist: ["张三丰"] } },
+    sendReply: async () => ({ ok: true }),
+  });
+  const [owed] = world.ingest("张三丰", [{ text: "在吗", from: "other", y: 260, source: "ocr" }]);
+  world.queueUnsent("张三丰", [owed]);
+  world.patch("张三丰", { cooldownUntil: Date.now() + 60_000 });
+
+  const result = await auto.tick();
+  assert.equal(result.acted, false);
+  assert.match(result.reason, /没有未读/, `冷却里不该回去补：${result.reason}`);
+  assert.equal(world.peekUnsent("张三丰").length, 1, "欠账不能被吃掉");
+});
+
 test("自动聊天：进错会话就退出，不回", async () => {
   const { device } = makeDevice();
   const world = new World();
