@@ -170,7 +170,10 @@ export class AutoChat {
       const want = forced.replace(/\s+/g, "");
       const hit = listOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(want));
       if (!hit) return { acted: false, reason: `列表里没找到「${forced}」`, ms: Date.now() - t0 };
-      name = cleanName(hit.text);
+      // 用白名单里的规范名：列表那行可能被 OCR 读歪（「以摸鱼…」），
+      // 后面所有 patch / 白名单判断都按名字走，用歪名字就进不去。
+      const hitName = cleanName(hit.text);
+      name = (this.#cfg.policy.whitelist ?? []).find((n) => sameChatName(n, hitName)) ?? hitName;
       rowY = hit.y + hit.h / 2;
       d.eventLog?.append("note", { stage: "force-chat", hit: { text: hit.text, y: hit.y, h: hit.h }, tapY: Math.round(rowY) }, { src: "monitor" });
     } else {
@@ -184,9 +187,23 @@ export class AutoChat {
       // 回去补发：靠 forceChatOnce 下一拍定向进这个会话（定向模式不要求红点）。
       const flushOwed = (): TickResult => {
         const owed = owedFirst()!;
-        this.forceChatOnce = owed.name;
-        d.eventLog?.append("note", { stage: "unsent-flush", chat: owed.name, count: owed.count }, { src: "policy" });
-        return { acted: false, reason: `回去补发「${owed.name}」欠着的 ${owed.count} 条`, ms: Date.now() - t0 };
+        // 会话名可能是 OCR 读歪的（实测读到过「以摸鱼闲聊群」，比真名多了个「以」）。
+        // 拿歪名字进会话会一直判「不在白名单」，欠账永远补不出去 —— 死循环。
+        // 先归一化到白名单里的规范名，再把欠账迁过去。
+        const canonical = wl.find((n) => sameChatName(n, owed.name)) ?? owed.name;
+        if (canonical !== owed.name) {
+          const moved = d.world.peekUnsent(owed.name);
+          if (moved.length > 0) d.world.queueUnsent(canonical, moved);
+          d.world.clearUnsent(owed.name);
+          d.eventLog?.append(
+            "note",
+            { stage: "unsent-rename", from: owed.name, to: canonical, count: moved.length || owed.count },
+            { src: "policy" },
+          );
+        }
+        this.forceChatOnce = canonical;
+        d.eventLog?.append("note", { stage: "unsent-flush", chat: canonical, count: owed.count }, { src: "policy" });
+        return { acted: false, reason: `回去补发「${canonical}」欠着的 ${owed.count} 条`, ms: Date.now() - t0 };
       };
 
       if (scan.rows.length === 0) {

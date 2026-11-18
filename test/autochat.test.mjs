@@ -290,6 +290,31 @@ test("自动聊天：未读都不在白名单时，也要回去补发欠着的�
   assert.match(result.reason, /回去补发「张三」/, `不能停在「未读都不在白名单」上：${result.reason}`);
 });
 
+test("自动聊天：欠着的会话名被 OCR 读歪 → 归一化到白名单规范名再补发", async () => {
+  const { device } = makeDevice();
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr({ list: [{ text: "李四", x: 200, y: 240, w: 120, h: 40 }] }),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "补一句：{last}" }),
+    config: { policy: { quietHours: null, whitelist: ["张三丰"] }, rowTapX: 300 },
+    sendReply: async () => ({ ok: true }),
+  });
+
+  // 真机读歪过：「摸鱼闲聊群」被读成「以摸鱼闲聊群」
+  const [owed] = world.ingest("以张三丰", [{ text: "在吗", from: "other", y: 260, source: "ocr" }]);
+  world.queueUnsent("以张三丰", [owed]);
+
+  const result = await auto.tick();
+  assert.match(result.reason, /回去补发「张三丰」/, `要认成白名单里的名字：${result.reason}`);
+  assert.equal(world.peekUnsent("张三丰").length, 1, "欠账要迁到规范名下");
+  assert.equal(world.peekUnsent("以张三丰").length, 0, "歪名字下不能留，否则会一直重复补");
+});
+
 test("自动聊天：进错会话就退出，不回", async () => {
   const { device } = makeDevice();
   const world = new World();
