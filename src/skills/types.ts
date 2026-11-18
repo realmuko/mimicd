@@ -24,6 +24,8 @@ export const OPS = [
   "act.close_panel",
   "act.tap_link_card",
   "act.tap_sticker_slot",
+  "act.clear_input",
+  "act.send_current_text",
   "act.open_sticker_panel",
   "act.tap_sticker_mood",
   "act.collect_sticker",

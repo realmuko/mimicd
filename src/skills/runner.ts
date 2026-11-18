@@ -192,6 +192,70 @@ export class SkillRunner {
         return this.#deps.actuator.typeText(text);
       }
 
+      case "act.clear_input": {
+        // 输入框里可能有上一次没发出去的残句（真机 19:29 看到两条回复粘在草稿里，
+        // 中间还夹着 %%% 的乱码）。发新的一句之前先清干净，免得越攒越长。
+        const cur = await this.#deps.actuator.readInput().catch(() => ({ before: "", after: "" }));
+        const current = `${cur.before}${cur.after}`;
+        if (!current.trim()) return { cleared: false };
+        await this.#deps.device.ime.clear();
+        await new Promise((r) => setTimeout(r, 250));
+        const left = `${(await this.#deps.actuator.readInput().catch(() => ({ before: "", after: "" }))).before}`;
+        this.#deps.eventLog?.append(
+          "note",
+          { op: "clear_input", had: current.slice(0, 40), left: left.slice(0, 40) },
+          { src: "skills.runner" },
+        );
+        return { cleared: true, had: current.length };
+      }
+
+      case "act.send_current_text": {
+        // 点「发送」并**确认真的发出去了**：以前只点一次固定坐标就算成功，
+        // 真机上按钮被键盘/浮层挡住时输入框里的字会留下来，引擎却记成已发送 ——
+        // 于是越攒越多（2026-11-18 19:29 的草稿：「…泥鳅啊%%%又爆一个？…」）。
+        //
+        // 两次机会，都不按返回键：会话页里按 BACK 很容易直接退出会话（真机踩过）。
+        //   a) OCR 找到「发送」按钮（且必须在屏幕右侧、文字正好是「发送」）；
+        //   b) 页面图里的 send_button 坐标（打字时用的探针输入法很矮，按钮就在右下）。
+        const text = String(args["text"] ?? "");
+        const screen = this.#deps.graph.device.screen;
+        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        const want = text.replace(/\s+/g, "");
+        const readAll = async (): Promise<string> => {
+          const cur = await this.#deps.actuator.readInput();
+          return `${cur.before}${cur.after}`.replace(/\s+/g, "");
+        };
+        const ocrSend = async (): Promise<{ x: number; y: number } | null> => {
+          const shot = await this.#deps.device.adb.screencap();
+          const region = { x: 0, y: Math.round(screen.h * 0.3), w: screen.w, h: Math.round(screen.h * 0.7) };
+          const ocr = await this.#deps.ocr!.recognize(shot.png, region);
+          // 只做 /发送/ 匹配会命中输入框正文（模型的话也常以「发送」开头）——
+          // 必须文字正好是「发送」、在右半边、宽度不大。
+          const btn = ocr.lines.find(
+            (l) => l.text.replace(/\s+/g, "") === "发送" && l.x > screen.w * 0.5 && l.w <= screen.w * 0.3,
+          );
+          return btn ? { x: btn.x + btn.w / 2, y: btn.y + btn.h / 2 } : null;
+        };
+        const coords: Array<{ x: number; y: number }> = [];
+        const ocrPoint = await ocrSend();
+        if (ocrPoint) coords.push(ocrPoint);
+        const rect = rectOf(this.#deps.graph, "chat", "send_button", screen.w, screen.h);
+        coords.push({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 });
+
+        for (const point of coords) {
+          await this.#deps.actuator.tapPoint(point.x, point.y, 60);
+          await sleep(800);
+          const now = await readAll();
+          if (!want || !now.includes(want)) return { sent: true, at: point };
+          this.#deps.eventLog?.append(
+            "note",
+            { op: "send", still: true, at: point, left: now.slice(0, 40) },
+            { src: "skills.runner" },
+          );
+        }
+        throw new SkillRunError("点了「发送」但输入框里还有文字 —— 这条没发出去");
+      }
+
       case "act.open_sticker_panel": {
         // 打开微信自带的表情面板。真机坑（2026-11-18）：
         // 发完文字键盘还开着时，输入栏被顶到屏幕中间，页面图里 emoji_panel_button 的坐标
