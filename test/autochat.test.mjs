@@ -265,6 +265,31 @@ test("自动聊天：没有未读就空转，不动作", async () => {
   assert.match(result.reason, /没有未读/);
   assert.equal(sentCount, 0);
 });
+test("自动聊天：未读都不在白名单时，也要回去补发欠着的消息", async () => {
+  const { device } = makeDevice();
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  const auto = new AutoChat({
+    device,
+    actuator,
+    // 列表里只有一个「李四」的未读行，不在白名单里
+    ocr: makeOcr({ list: [{ text: "李四", x: 200, y: 240, w: 120, h: 40 }] }),
+    graph: GRAPH,
+    world,
+    brain: new ScriptedBrain({ template: "补一句：{last}" }),
+    config: { policy: { quietHours: null, whitelist: ["张三"] }, rowTapX: 300 },
+    sendReply: async () => ({ ok: true }),
+  });
+
+  // 张三那边有一条因为合并窗口/冷却攒下来、红点已经被清掉的消息
+  const [owed] = world.ingest("张三", [{ text: "在吗", from: "other", y: 260, source: "ocr" }]);
+  world.queueUnsent("张三", [owed]);
+
+  const result = await auto.tick();
+  assert.equal(result.acted, false, result.reason);
+  assert.match(result.reason, /回去补发「张三」/, `不能停在「未读都不在白名单」上：${result.reason}`);
+});
+
 test("自动聊天：进错会话就退出，不回", async () => {
   const { device } = makeDevice();
   const world = new World();

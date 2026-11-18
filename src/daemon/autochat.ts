@@ -174,23 +174,32 @@ export class AutoChat {
       rowY = hit.y + hit.h / 2;
       d.eventLog?.append("note", { stage: "force-chat", hit: { text: hit.text, y: hit.y, h: hit.h }, tapY: Math.round(rowY) }, { src: "monitor" });
     } else {
+      const wl = (this.#cfg.policy.whitelist ?? []).slice();
+      // 「欠着没回」的消息（冷却 / 合并窗口期间攒下的）。微信只要进过一次会话就把红点清了，
+      // 列表扫描永远发现不了它们 —— 不主动回去补发，这些消息就再没人理了
+      // （旧插件的 flushPending 就是干这个的）。
+      const owedFirst = () =>
+        d.world.listUnsent().find((x) => wl.length === 0 || wl.some((n) => sameChatName(n, x.name)));
+
+      // 回去补发：靠 forceChatOnce 下一拍定向进这个会话（定向模式不要求红点）。
+      const flushOwed = (): TickResult => {
+        const owed = owedFirst()!;
+        this.forceChatOnce = owed.name;
+        d.eventLog?.append("note", { stage: "unsent-flush", chat: owed.name, count: owed.count }, { src: "policy" });
+        return { acted: false, reason: `回去补发「${owed.name}」欠着的 ${owed.count} 条`, ms: Date.now() - t0 };
+      };
+
       if (scan.rows.length === 0) {
-        // 没有未读，但可能有「欠着没回」的消息（冷却 / 合并窗口期间攒下的）。
-        // 微信只要进过一次会话就把红点清了，列表扫描永远发现不了它们 —— 不主动回去补发，
-        // 这些消息就再没人理了（旧插件的 flushPending 就是干这个的）。
-        const wl = (this.#cfg.policy.whitelist ?? []).slice();
-        const owed = d.world
-          .listUnsent()
-          .filter((x) => wl.length === 0 || wl.some((n) => sameChatName(n, x.name)));
-        if (owed.length > 0) {
-          this.forceChatOnce = owed[0]!.name;
-          d.eventLog?.append("note", { stage: "unsent-flush", chat: owed[0]!.name, count: owed[0]!.count }, { src: "policy" });
-          return { acted: false, reason: `回去补发「${owed[0]!.name}」欠着的 ${owed[0]!.count} 条`, ms: Date.now() - t0 };
-        }
+        if (owedFirst()) return flushOwed();
         return { acted: false, reason: "列表里没有未读", ms: Date.now() - t0 };
       }
-      name = pickChat(scan.rows, (this.#cfg.policy.whitelist ?? []).slice());
-      if (!name) return { acted: false, reason: "未读都不在白名单", ms: Date.now() - t0 };
+      name = pickChat(scan.rows, wl);
+      if (!name) {
+        // 有未读、但一个都不在白名单里 —— 别在这一句上每拍干等：欠着的照样要回去补。
+        // （2026-11-18 真机：其它群有未读时，合并窗口攒下的那 9 条一直没被补发。）
+        if (owedFirst()) return flushOwed();
+        return { acted: false, reason: "未读都不在白名单", ms: Date.now() - t0 };
+      }
       const wanted = name;
       // pickChat 返回的是白名单里的规范名；列表里那行可能被 OCR 读歪（「以摸鱼…」），按模糊找
       const row = scan.rows.find((r) => r.name === wanted) ?? scan.rows.find((r) => sameChatName(r.name, wanted));
