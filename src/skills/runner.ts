@@ -192,6 +192,45 @@ export class SkillRunner {
         return this.#deps.actuator.typeText(text);
       }
 
+      case "act.open_sticker_panel": {
+        // 打开微信自带的表情面板。真机坑（2026-11-18）：
+        // 发完文字键盘还开着时，输入栏被顶到屏幕中间，页面图里 emoji_panel_button 的坐标
+        // 点下去落在键盘上（有时还切出系统表情键盘），面板根本不开 —— 后面的
+        // act.tap_sticker_mood 只会报「面板没打开」。
+        // 所以这里：先收键盘（并确认没把会话页一起退掉）→ 点一次 → 验一次，最多 3 次。
+        const screen = this.#deps.graph.device.screen;
+        const rect = rectOf(this.#deps.graph, "chat", "emoji_panel_button", screen.w, screen.h);
+        const cx = Math.round(rect.x + rect.w / 2);
+        const cy = Math.round(rect.y + rect.h / 2);
+        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        const inputShown = async (): Promise<boolean> => {
+          try {
+            return /mInputShown=true/.test(await this.#deps.device.adb.shell("dumpsys input_method", 20000));
+          } catch {
+            return false;
+          }
+        };
+        const panelOpen = async (): Promise<boolean> => {
+          const bmp = decode((await this.#deps.device.adb.screencap()).png);
+          return !looksLikeInputBar(bmp);
+        };
+        if (await panelOpen()) return { open: true, via: "already" };
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (await inputShown()) {
+            await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+            await sleep(450);
+            const nowPage = await this.#page();
+            if (nowPage.page !== "chat") {
+              throw new SkillRunError(`收键盘之后不在会话页（${nowPage.page}），没法打开表情面板`);
+            }
+          }
+          await this.#deps.actuator.tapPoint(cx, cy, 60);
+          await sleep(650);
+          if (await panelOpen()) return { open: true, attempts: attempt + 1, at: { x: cx, y: cy } };
+        }
+        throw new SkillRunError("点不到表情按钮（键盘收不掉或坐标不对）");
+      }
+
       case "act.tap_sticker_slot": {
         const shot = await this.#deps.device.adb.screencap();
         const bmp = decode(shot.png);
@@ -394,6 +433,16 @@ export class SkillRunner {
         let chosen: Cand | null = null;
         const here = await scanNow();
         if (here.length > 0) chosen = pick(here);
+        if (!chosen) {
+          // 面板可能停在别的 tab（表情 / 搜索）——切到收藏再扫一次。
+          // 以前是技能里盲点 tab_favorites 的绝对坐标，面板高度一变就点到格子里
+          // 直接把一张表情发出去（2026-11-18 真机）。
+          const tab = rectOf(this.#deps.graph, "sticker_panel", "tab_favorites", screen.w, screen.h);
+          await this.#deps.actuator.tapPoint(Math.round(tab.x + tab.w / 2), Math.round(tab.y + tab.h / 2), 60);
+          await sleep(500);
+          const again = await scanNow();
+          if (again.length > 0) chosen = pick(again);
+        }
         if (!chosen) {
           for (let i = 0; i < 3; i++) await scroll("top");
           for (let s = 0; s < 3 && !chosen; s++) {
