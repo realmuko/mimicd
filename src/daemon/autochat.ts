@@ -10,8 +10,8 @@ import type { EventLog } from "../eventlog.ts";
 import type { Bitmap, Rect } from "../image/image.ts";
 import { decode } from "../image/image.ts";
 import type { Ocr } from "../perception/ocr.ts";
-import { detectPage, rectOf, type PageGraph } from "../perception/page.ts";
-import { waitStable } from "../perception/stable.ts";
+import { decodeFrame, detectPage, rectOf, type PageGraph } from "../perception/page.ts";
+import { waitStable, waitScrollSettle } from "../perception/stable.ts";
 import { bubbleSide, messagesFromOcr, mergeBubbles } from "../monitor/read.ts";
 import { findCardTitle } from "../perception/cards.ts";
 import { findImageBubbles } from "../perception/bubbles.ts";
@@ -19,7 +19,7 @@ import { cleanName, isNameLine, scanList } from "../monitor/scan.ts";
 import { detectChatKind, titleFromOcr, titleMatches } from "../monitor/chat.ts";
 import { decide, pickChat, sameChatName, type PolicyConfig } from "../policy/policy.ts";
 import type { Brain, BrainContext } from "../brain/brain.ts";
-import { enterChat } from "./navigate.ts";
+import { enterChat, findMentionTag, scrollToBottom } from "./navigate.ts";
 import type { ImePort } from "../device/types.ts";
 
 import type { World } from "../world/state.ts";
@@ -108,6 +108,13 @@ export class AutoChat {
   async #tick(attempt: number): Promise<TickResult> {
     const d = this.#d;
     const t0 = Date.now();
+
+    // 0) 锁屏/息屏就别折腾了：截图全黑会让页面判定一路 unknown，反复按返回还可能
+    //    触发锁屏动效（旧插件 screenAwake 就是干这个的）。查不到状态时按"醒着"处理，别误停。
+    if (d.device.adb.screenAwake) {
+      const awake = await d.device.adb.screenAwake().catch(() => true);
+      if (!awake) return { acted: false, reason: "手机息屏/锁屏，本轮跳过", ms: Date.now() - t0 };
+    }
 
     // 1) 回到列表
     const atList = await this.#ensureList();
@@ -210,10 +217,45 @@ export class AutoChat {
     }
     const title: string | null = nav.title ?? null;
 
-    // 等画面稳定只看标题栏（静区）：聊天区有动图表情，整帧永远不稳（device-probes 实测）。
+    // 等画面稳定只看静区（标题栏 / 输入栏）：聊天区有动图表情，整帧永远不稳（device-probes 实测）。
     const headerArea = rectOf(d.graph, "chat", "title_strip", screen.w, screen.h);
-    await waitStable(d.device.adb, { frames: 2, timeoutMs: 4000, region: headerArea });
-    const chatShot: Frame = await d.device.adb.screencap();
+    // 页面图里没有 input_bar 也不该把整轮 tick 搞崩（老配置 / 测试桩都会缺元素）。
+    let inputBar: Rect | null = null;
+    try {
+      inputBar = rectOf(d.graph, "chat", "input_bar", screen.w, screen.h);
+    } catch {
+      inputBar = null;
+    }
+
+    // (a) 顶部如果挂着「有人@我」，先点它（旧插件 findMentionTag）。它返回的是提示条中心，
+    //     点"上沿"会点到标题栏（旧实现有这个坑）。
+    try {
+      const pre = await d.device.adb.screencap();
+      const tag = await findMentionTag(pre.png, d.ocr, rectOf(d.graph, "chat", "mention_tag", screen.w, screen.h));
+      if (tag) {
+        d.eventLog?.append("note", { stage: "mention-tag", chat: name, x: tag.x, y: tag.y }, { src: "monitor" });
+        await d.actuator.tapPoint(tag.x, tag.y, 70);
+      }
+    } catch (err) {
+      d.eventLog?.append("note", { stage: "mention-tag", chat: name, error: (err as Error).message }, { src: "monitor" });
+    }
+
+    // (b) 带未读进来时微信停在"第一条未读"，不滑到底就看不到最新的话
+    //     （旧插件 scrollToBottom；否则读到的是最旧那一屏，会据此回错话）。
+    await scrollToBottom(d.device.adb, 3, { screen });
+    // (c) 等滚停，并把这一帧直接拿去读消息（省一张截图）。
+    const settled = await waitScrollSettle(d.device.adb, {
+      regions: inputBar ? [headerArea, inputBar] : [headerArea],
+      frames: 2,
+      timeoutMs: 3000,
+    });
+    const chatShot: Frame = {
+      png: settled.lastPng,
+      width: screen.w,
+      height: screen.h,
+      ms: 0,
+      bmp: settled.lastFrame,
+    };
 
     // 5) 定群/私聊：标题只是第一条线索，正文里出现 ≥2 个不同发送者才算硬证据
     //    （world.patch 里保证 group 不会被一次误判降级成 dm —— 旧插件踩过这个坑：
@@ -221,7 +263,7 @@ export class AutoChat {
     const kind = detectChatKind(title || name);
     d.world.patch(name, { kind });
 
-    const chatBmp: Bitmap = decode(chatShot.png);
+    const chatBmp: Bitmap = chatShot.bmp ?? decode(chatShot.png);
     const chatArea = rectOf(d.graph, "chat", "message_area", screen.w, screen.h);
     const chatOcr = await d.ocr.recognize(chatShot.png, chatArea);
     const parsed = mergeBubbles(
@@ -390,12 +432,18 @@ export class AutoChat {
   }
 
   /** 确保停在会话列表：不是列表就 back，最多 maxBackSteps 次。 */
+  /** 连续几次回不到列表：用来判「微信僵死」 */
+  #ensureListFails = 0;
+
   async #ensureList(): Promise<boolean> {
     for (let i = 0; i <= this.#cfg.maxBackSteps; i++) {
       const frame = await this.#d.device.adb.screencap();
       const focus = await this.#d.device.adb.focus();
-      const guess = detectPage(decode(frame.png), focus);
-      if (guess.page === "list") return true;
+      const guess = detectPage(decodeFrame(frame), focus);
+      if (guess.page === "list") {
+        this.#ensureListFails = 0;
+        return true;
+      }
       if (guess.page === "other") {
         // 前台是别的 App：默认不抢焦点，直接放弃这一轮（人手正在用别的东西）
         if (!this.#cfg.allowLaunch) return false;
@@ -411,6 +459,20 @@ export class AutoChat {
       }
       await this.#d.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
       await new Promise((r) => setTimeout(r, 400));
+    }
+
+    // 连按几次返回都回不到列表：多半是微信僵死了（华为上实测过 dumpsys 说微信在前台、
+    // 截图却是桌面，这种只能重启 App）。旧插件是连 3 次才动手，这里一样 —— 别每拍都重启。
+    this.#ensureListFails++;
+    if (this.#ensureListFails >= 3) {
+      this.#ensureListFails = 0;
+      const adb = this.#d.device.adb;
+      if (adb.restartWeChat) {
+        const r = await adb
+          .restartWeChat({ forceStopWaitMs: 1500, launchWaitMs: 6000 })
+          .catch((err) => ({ ok: false, log: (err as Error).message, pkg: "com.tencent.mm" }));
+        this.#d.eventLog?.append("note", { stage: "restart-wechat", ok: r.ok, log: r.log }, { src: "monitor" });
+      }
     }
     return false;
   }
