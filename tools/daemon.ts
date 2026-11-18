@@ -496,7 +496,19 @@ async function sendReplyInner(
         await new Promise((r) => setTimeout(r, 400));
       }
     } catch {
-      // 收不掉就算了，后面的面板检查会兜底
+      // 收不掉就算了，下面的页面检查会兜底
+    }
+    // 发表情前必须确认还在会话页：BACK 不一定只收键盘 —— 很多时候发完文字键盘已经被
+    // send_text 收掉，这一下 BACK 会把会话页一起退到列表，表情技能的前置条件「期望 chat」
+    // 直接失败，于是「文字发出去了、表情永远发不出去」（2026-11-18 真机 18:48/18:49 两次）。
+    const beforeSticker = detectPage(decodeFrame(await adb.screencap()), await adb.focus());
+    eventLog.append("note", { stage: "sticker-page", page: beforeSticker.page }, { src: "handoff" });
+    if (beforeSticker.page !== "chat" && !(await enterChat(chat))) {
+      return {
+        ok: textSent,
+        reason: textSent ? `文字已发；退到 ${beforeSticker.page} 后进不回「${chat}」，表情没发` : `进不到会话「${chat}」`,
+        textSent,
+      };
     }
     const skill = registry.get("wechat.send_sticker_mood");
     if (!skill) return { ok: textSent, reason: textSent ? "文字已发，但没有 send_sticker_mood 技能" : "没有 send_sticker_mood 技能", textSent };
