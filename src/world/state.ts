@@ -349,6 +349,20 @@ export class World {
   }
 
   /**
+   * 从待补发队列里挑出已处理过的删掉，返回删了几条。
+   * 「主模型说这条不接」时用：判过的消息还留在队列里，冷却一过又会被捞出来问一遍，
+   * 5 分钟一次、一小时上限 20 次，全在问同一批垃圾消息（2026-11-18 真机撞到）。
+   */
+  dropUnsent(name: string, drop: (m: SeenMessage) => boolean): number {
+    const state = this.chat(name);
+    const list = state.unsent ?? [];
+    const kept = list.filter((m) => !drop(m));
+    const removed = list.length - kept.length;
+    if (removed > 0) state.unsent = kept;
+    return removed;
+  }
+
+  /**
    * 还有待补发消息的会话。给巡场用：静默期/冷却期攒下的消息，
    * 等回到列表时红点已经被微信清掉了，列表扫描发现不了它们 —— 得靠这里把人叫回去补。
    */

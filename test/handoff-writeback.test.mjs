@@ -139,8 +139,13 @@ test("交接回复发送失败 → 不改世界（还是没回过）", async () 
   }
 });
 
-test("交接跳过 → 挂一个短冷却（默认 5 分钟，可配）", async () => {
+test("交接跳过 → 挂一个短冷却（默认 5 分钟，可配），并清掉判过的待补发消息", async () => {
   const world = new World();
+  // 待补发队列里两条：一条是这次给模型看过的（「在吗」），一条没看过
+  const [m1] = world.ingest("张三", [{ text: "在吗", from: "other", y: 300, source: "ocr" }]);
+  const [m2] = world.ingest("张三", [{ text: "没给模型看过的另一句", from: "other", y: 600, source: "ocr" }]);
+  world.queueUnsent("张三", [m1, m2]);
+
   const queue = new PendingQueue();
   const item = queue.add({ chat: "张三", kind: "dm", messages: [{ from: "other", text: "在吗" }] });
   const { deps } = makeDeps({ world, pending: queue, skipCooldownMs: 60_000 });
@@ -153,6 +158,8 @@ test("交接跳过 → 挂一个短冷却（默认 5 分钟，可配）", async 
     const chat = world.chat("张三");
     assert.ok(chat.cooldownUntil >= before + 60_000 - 2000, "跳过也要冷却，否则同一拍又扫到同一条");
     assert.equal(chat.replies.length, 0, "跳过不算回复");
+    // 判过「不接」的那条要清掉：否则冷却一过又捞出来问一遍，一小时问 20 次同一批消息
+    assert.deepEqual(world.peekUnsent("张三").map((m) => m.text), ["没给模型看过的另一句"], "没看过的消息不能跟着丢");
   } finally {
     await d.close();
   }

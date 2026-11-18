@@ -325,6 +325,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
         const now = Date.now();
         try {
           deps.world.patch(item.chat, { cooldownUntil: now + (deps.skipCooldownMs ?? DEFAULT_SKIP_COOLDOWN_MS) });
+          // 判过「不接」的消息要从待补发队列里删掉：留着的话冷却一过又会被捞出来问一遍，
+          // 5 分钟一次、一小时上限 20 次 —— 全在问同一批已经明确不接的垃圾消息。
+          const shown = new Set(item.messages.map((m) => `${m.from}\u0000${m.text}`));
+          const dropped = deps.world.dropUnsent(item.chat, (m) => shown.has(`${m.from}\u0000${m.text}`));
+          if (dropped > 0) {
+            deps.eventLog.append("note", { stage: "skip-clear-unsent", chat: item.chat, dropped }, { src: "handoff" });
+          }
           deps.world.save();
         } catch (err) {
           deps.eventLog.append("note", { stage: "skip-writeback", chat: item.chat, error: (err as Error).message }, { src: "handoff" });
