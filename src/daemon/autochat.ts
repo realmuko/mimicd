@@ -377,11 +377,17 @@ export class AutoChat {
 
     // 7) 想一句（交接模式下挂起，等主模型给文本）
     let replyText: string;
+    // 给主模型看的必须是「这一拍要回的那一批」（unsent + fresh），不是「最后 12 条」。
+    // 攒下的欠账可能比一时的新消息还老：只给最后 12 条，主模型判的那批和 unsent 里的
+    // 对不上 —— 跳过时清理不掉，下个冷却又回来问同一批（真机：同一批乱码被叫醒三次）。
+    const batchById = new Map<string, (typeof fresh)[number]>();
+    for (const m of [...unsent, ...fresh]) batchById.set(m.id, m);
+    const batchMsgs = [...batchById.values()].sort((a, b) => a.firstSeenAt - b.firstSeenAt).slice(-12);
     const brainCtx: BrainContext = {
       chat: name,
       kind: d.world.chat(name).kind,
       needsJudgment: decision.needsJudgment,
-      messages: d.world.context(name, 12).map((m) => ({ from: m.from, text: m.text, ...(m.sender ? { sender: m.sender } : {}) })),
+      messages: batchMsgs.map((m) => ({ from: m.from, text: m.text, ...(m.sender ? { sender: m.sender } : {}) })),
     };
 
     if (this.#cfg.handoff) {

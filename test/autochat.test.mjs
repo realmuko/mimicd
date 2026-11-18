@@ -347,6 +347,53 @@ test("自动聊天：欠账还在冷却里时不去补（别每拍白进一次�
   assert.equal(world.peekUnsent("张三丰").length, 1, "欠账不能被吃掉");
 });
 
+test("自动聊天：交给主模型的是这一拍要补的那批，不是「最后 12 条」", async () => {
+  const { device } = makeDevice();
+  const world = new World();
+  const actuator = new Actuator(device, { rng: createRng(7) });
+  let ctx = null;
+  const auto = new AutoChat({
+    device,
+    actuator,
+    ocr: makeOcr({
+      list: [{ text: "张三丰", x: 200, y: 240, w: 140, h: 40 }],
+      header: [{ text: "张三丰", x: 400, y: 80, w: 120, h: 40 }],
+    }),
+    graph: GRAPH,
+    world,
+    config: {
+      policy: { quietHours: null, whitelist: ["张三丰"], mergeWindowMs: 0 },
+      rowTapX: 300,
+      handoff: async (c) => {
+        ctx = c;
+        return "p-batch";
+      },
+    },
+  });
+
+  // 一条攒下的旧消息，之后又来了 15 条 —— 「最后 12 条」里已经没有它了
+  const [old] = world.ingest("张三丰", [{ text: "攒下的旧消息", from: "other", y: 200, source: "ocr" }]);
+  world.ingest(
+    "张三丰",
+    Array.from({ length: 15 }, (_, i) => ({
+      // 每句文本都要不一样：去重有模糊层，长得像的会被当成同一条
+      text: `第${"天地玄黄宇宙洪荒日月盈昃辰宿列"[i]}句话${i}`,
+      from: "other",
+      y: 300 + i * 40,
+      source: "ocr",
+    })),
+  );
+  world.queueUnsent("张三丰", [old]);
+  assert.ok(!world.context("张三丰", 12).some((m) => m.text === "攒下的旧消息"), "前提：已经不在最后 12 条里");
+
+  await auto.tick();
+  assert.ok(ctx, "应该挂给主模型");
+  assert.ok(
+    ctx.messages.some((m) => m.text === "攒下的旧消息"),
+    "补偿批次里的旧消息要一起给主模型看，否则它判不掉、跳过时也清不掉",
+  );
+});
+
 test("自动聊天：进错会话就退出，不回", async () => {
   const { device } = makeDevice();
   const world = new World();
