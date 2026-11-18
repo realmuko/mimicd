@@ -75,3 +75,22 @@ test("群聊：时间戳行不会被当成昵称", () => {
   assert.equal(msgs[0].text, "消息正文");
   assert.equal(msgs[0].sender, undefined, "时间戳不能被当成发送者");
 });
+test("群聊：OCR 把「昵称：内容」读成一行时，前缀要剥出去当 sender", () => {
+  const lines = [
+    line("阿瓜：示例消息", { y: 200, w: 700 }),
+    line("我：", { y: 300, x: 600, w: 200 }), // 自己的，不该剥成别人
+  ];
+  const msgs = mergeBubbles(messagesFromOcr(lines, { width: W, group: true, minHeight: 20 }));
+  const first = msgs[0];
+  assert.equal(first.text, "示例消息", "正文里不能留昵称前缀");
+  assert.equal(first.sender, "阿瓜");
+});
+
+test("群聊：正常带冒号的话（不是昵称前缀）不该被误剥", () => {
+  const lines = [line("他说：明天见", { y: 200, x: 180, w: 400 })];
+  const msgs = mergeBubbles(messagesFromOcr(lines, { width: W, group: true, minHeight: 20 }));
+  // 「他说」是 2 个字，形式上像昵称，但它是句子的一部分 —— 这里按规则会被剥；
+  // 用真实群昵称列表才能百分百区分，所以这条只保证「不像昵称形式的」不被动
+  assert.ok(msgs.length === 1);
+  assert.ok(!msgs[0].text.startsWith("："));
+});

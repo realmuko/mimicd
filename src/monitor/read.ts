@@ -124,8 +124,20 @@ export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessag
     const byColor = opts.bmp ? bubbleSide(opts.bmp, line) : null;
     const centerX = line.x + line.w / 2;
     const from: Side = byColor ?? (centerX > opts.width * meRatio ? "me" : "other");
-    const sender = from === "other" ? pendingSender : undefined;
-    out.push({ text, from, y: line.y, h: line.h, ...(sender ? { sender } : {}) });
+    // OCR 有时把「昵称：内容」读成一整行（群里昵称就在气泡上方，字高接近时会合并）。
+    // 旧插件在 lineKey 里专门剥过这个前缀；不剥的话"谁说的"就混进正文，模型会当成
+    // 对方在说"某某：xxx"。只在群聊、只在对方消息上剥，前缀不允许带空白。
+    let body = text;
+    let senderFromPrefix: string | undefined;
+    if (opts.group && from === "other") {
+      const m = /^([^\s：:]{1,12})[：:]\s*(.+)$/.exec(text);
+      if (m && !/^我$/.test(m[1]!) && !/^\d+$/.test(m[1]!)) {
+        senderFromPrefix = m[1]!;
+        body = m[2]!;
+      }
+    }
+    const sender = from === "other" ? senderFromPrefix ?? pendingSender : undefined;
+    out.push({ text: body, from, y: line.y, h: line.h, ...(sender ? { sender } : {}) });
     // 自己发的消息没有昵称行，别把上一个人的名字留给后面
     if (from === "me") pendingSender = undefined;
   }
