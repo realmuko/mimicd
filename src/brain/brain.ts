@@ -13,6 +13,8 @@ import type { Side } from "../world/state.ts";
 export interface BrainMessage {
   from: Side;
   text: string;
+  /** 群聊里的发送者昵称，用来区分「对方」到底是群里哪个人 */
+  sender?: string;
 }
 
 export interface BrainContext {

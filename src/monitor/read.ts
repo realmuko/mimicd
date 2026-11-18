@@ -17,6 +17,8 @@ export interface ReadMessage {
   y: number;
   /** OCR 置信度代理：字高。太小的行多半是时间/预览 */
   h: number;
+  /** 群聊里这条消息是谁发的（气泡上方的昵称）；私聊/自己的消息没有 */
+  sender?: string;
 }
 
 /**
@@ -56,6 +58,8 @@ export interface ReadOptions {
   minHeight?: number;
   /** 有截图时优先用气泡颜色判左右 */
   bmp?: Bitmap;
+  /** 群聊：气泡上方那行小字是发送者昵称，要收下来归属给下面那条消息 */
+  group?: boolean;
 }
 
 const TIME_LIKE = /^(\d{1,2}[:：]\d{2}|\d{4}年|\d{1,2}月\d{1,2}日|昨天|今天|前天|上午|下午|凌晨|晚上|中午)/;
@@ -65,13 +69,23 @@ export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessag
   const meRatio = opts.meRatio ?? 0.55;
   const minHeight = opts.minHeight ?? 20;
   const out: ReadMessage[] = [];
+  /** 群里刚读到、还没归属出去的发送者昵称 */
+  let pendingSender: string | undefined;
 
   for (const line of lines) {
     const text = line.text.trim();
     if (!text) continue;
     if (line.h < minHeight) continue;
-    // 群聊里气泡上方有发送者昵称（小字、靠左），头像附近还有数字噪声 —— 都不是消息正文
-    if (line.h < 34 && line.x < opts.width * 0.25) continue;
+    // 群聊里气泡上方那行是发送者昵称（小字、靠左），头像附近还有数字噪声。
+    // 以前这里直接 continue，把昵称整个丢掉了 —— 模型只看到一整屏「对方：...」，
+    // 根本不知道是群里哪个人说的，接话自然就接不准。
+    // 现在收下来，挂到它下面那条消息上；时间、系统提示、纯数字仍然丢掉。
+    if (line.h < 34 && line.x < opts.width * 0.25) {
+      if (opts.group && !/^\d+$/.test(text) && !TIME_LIKE.test(text) && !SYSTEM_LIKE.test(text)) {
+        pendingSender = text;
+      }
+      continue;
+    }
     if (/^\d+$/.test(text)) continue;
     if (TIME_LIKE.test(text)) continue;
     if (SYSTEM_LIKE.test(text)) continue;
@@ -81,7 +95,10 @@ export function messagesFromOcr(lines: OcrLine[], opts: ReadOptions): ReadMessag
     const byColor = opts.bmp ? bubbleSide(opts.bmp, line) : null;
     const centerX = line.x + line.w / 2;
     const from: Side = byColor ?? (centerX > opts.width * meRatio ? "me" : "other");
-    out.push({ text, from, y: line.y, h: line.h });
+    const sender = from === "other" ? pendingSender : undefined;
+    out.push({ text, from, y: line.y, h: line.h, ...(sender ? { sender } : {}) });
+    // 自己发的消息没有昵称行，别把上一个人的名字留给后面
+    if (from === "me") pendingSender = undefined;
   }
 
   out.sort((a, b) => a.y - b.y);
@@ -97,6 +114,8 @@ export function mergeBubbles(messages: ReadMessage[], lineGap = 34): ReadMessage
     const gap = prev ? msg.y - (prev.y + prev.h) : Number.POSITIVE_INFINITY;
     if (prev && prev.from === msg.from && gap < Math.max(lineGap, prev.h * 0.9)) {
       prev.text = `${prev.text}${needsSpace(prev.text, msg.text) ? " " : ""}${msg.text}`;
+      // 气泡换行合并，发送者要跟着走（同一气泡只可能是一个人）
+      if (!prev.sender && msg.sender) prev.sender = msg.sender;
       // 合并后把 y/h 更新到「最后一行」，否则下一行的间隔是按第一行算的，永远合不上
       prev.y = msg.y;
       prev.h = msg.h;

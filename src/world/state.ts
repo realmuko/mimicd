@@ -16,6 +16,8 @@ export interface SeenMessage {
   id: string;
   text: string;
   from: Side;
+  /** 群聊里的发送者昵称（气泡上方那行小字）；私聊和自己的消息没有 */
+  sender?: string;
   firstSeenAt: number;
   source: "ocr" | "copy";
   /** 屏幕上的纵坐标，用来判断先后 */

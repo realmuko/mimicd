@@ -230,7 +230,7 @@ export class AutoChat {
     const chatArea = rectOf(d.graph, "chat", "message_area", screen.w, screen.h);
     const chatOcr = await d.ocr.recognize(chatShot.png, chatArea);
     const parsed = mergeBubbles(
-      messagesFromOcr(chatOcr.lines, { width: screen.w, meRatio: 0.55, minHeight: 20, bmp: chatBmp }),
+      messagesFromOcr(chatOcr.lines, { width: screen.w, meRatio: 0.55, minHeight: 20, bmp: chatBmp, group: kind === "group" }),
     );
 
     // 图片/表情气泡没有文字，OCR 出来是空白 —— 主模型会以为对方什么都没发。
@@ -262,7 +262,13 @@ export class AutoChat {
       );
     }
 
-    const fresh = d.world.ingest(name, parsed.map((m) => ({ text: m.text, from: m.from, y: m.y, source: "ocr" as const })));
+    const fresh = d.world.ingest(name, parsed.map((m) => ({
+      text: m.text,
+      from: m.from,
+      y: m.y,
+      source: "ocr" as const,
+      ...(m.sender ? { sender: m.sender } : {}),
+    })));
     for (const m of fresh) {
       d.eventLog?.append(
         "message.seen",
@@ -292,7 +298,7 @@ export class AutoChat {
       chat: name,
       kind: d.world.chat(name).kind,
       needsJudgment: decision.needsJudgment,
-      messages: d.world.context(name, 12).map((m) => ({ from: m.from, text: m.text })),
+      messages: d.world.context(name, 12).map((m) => ({ from: m.from, text: m.text, ...(m.sender ? { sender: m.sender } : {}) })),
     };
 
     if (this.#cfg.handoff) {

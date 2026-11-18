@@ -14,7 +14,8 @@ export interface PendingItem {
   id: string;
   chat: string;
   kind: "group" | "dm" | "unknown";
-  messages: Array<{ from: string; text: string }>;
+  /** 群聊里每条消息带上发送者昵称，主模型才知道是群里哪个人说的 */
+  messages: Array<{ from: string; text: string; sender?: string }>;
   createdAt: number;
   /** 过期时间：太久没回就别回了，避免翻旧账 */
   expiresAt: number;
@@ -49,7 +50,7 @@ export class PendingQueue {
       id: randomUUID(),
       chat: ctx.chat,
       kind: ctx.kind ?? "unknown",
-      messages: ctx.messages.map((m) => ({ from: m.from, text: m.text })),
+      messages: ctx.messages.map((m) => ({ from: m.from, text: m.text, ...(m.sender ? { sender: m.sender } : {}) })),
       needsJudgment: ctx.needsJudgment,
       createdAt: now,
       expiresAt: now + this.#ttlMs,

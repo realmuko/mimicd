@@ -29,6 +29,33 @@ const LOG = path.join(DATA, "watchdog.log");
 const PID_FILE = path.join(DATA, "watchdog.pid");
 const RUN_CMD = path.join(ROOT, "scripts", "run-daemon.cmd");
 
+/**
+ * 拉起引擎：**直接 spawn node，不经过 cmd 和 `>>` 重定向**。
+ *
+ * 为什么（2026-11-18 踩的）：走 `cmd /c run-daemon.cmd` 时，日志是靠 cmd 的
+ * `>> data\daemon.log` 打开的。那个写句柄会跟着启动它的 shell/job 一起泄漏，
+ * 进程死了句柄还在 —— 下一次拉起就报「另一个程序正在使用此文件」，
+ * 看门狗明明执行了"拉起"，日志里却一个字都没有。
+ * 现在自己 open fd 交给子进程、父进程马上 close，句柄只跟着引擎走。
+ *
+ * 参数要和 run-daemon.cmd 保持一致（手动启动走那边，自动拉起走这边）。
+ */
+const NODE = "D:\\nodejs\\node.exe";
+const DAEMON_LOG = path.join(DATA, "daemon.log");
+const ADB = "D:\\deepseek harness\\.tools\\platform-tools\\adb.exe";
+const SERIAL = "<serial>";
+const IME_RESTORE = "com.baidu.input_huawei/.ImeService";
+const DAEMON_ARGS = [
+  path.join(ROOT, "tools", "daemon.ts"),
+  "--adb",
+  ADB,
+  "--serial",
+  SERIAL,
+  "--launch-wechat",
+  "--ime-restore",
+  IME_RESTORE,
+];
+
 const CHECK_MS = 30_000;
 const FAIL_TO_RESTART = 3;
 const TICK_STALE_MS = 180_000;
@@ -142,9 +169,22 @@ async function restart(reason) {
     return false;
   }
   try {
-    log("拉起 run-daemon.cmd");
-    const child = spawn("cmd", ["/c", RUN_CMD], { cwd: ROOT, detached: true, stdio: "ignore", windowsHide: true });
+    log("拉起 daemon（直接 node，不经 cmd）");
+    const fd = fs.openSync(DAEMON_LOG, "a");
+    const child = spawn(NODE, DAEMON_ARGS, {
+      cwd: ROOT,
+      detached: true,
+      stdio: ["ignore", fd, fd],
+      windowsHide: true,
+    });
+    child.on("error", (e) => log(`拉起失败：${e?.message || e}`));
     child.unref();
+    // 子进程已经拿到自己的副本，父进程这份马上还回去（别把句柄又漏出去）
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* ignore */
+    }
     return true;
   } catch (err) {
     log(`拉起失败：${err?.message || err}`);
