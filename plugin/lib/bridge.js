@@ -27,7 +27,8 @@ const POLL_STALL_MS = 60000;
 const STYLE_HEAD = [
   "你现在用自己的微信号聊天。别暴露你是 AI，别解释你在做什么，只写要发出去的那一句。",
   "回复不超过 60 字，口语，别用书面语，别加引号。",
-  "不用每条都写字：被逗笑、无语、敷衍、震惊的时候，直接回一个表情往往更像人（但别每条都发表情）。",
+  "情绪化的回复优先带 stickerMood（开心/无语/嘲讽/委屈…），被逗笑或懒得打字时只回一个表情也行；" +
+    "发不发由引擎按概率和冷却把关，你不必担心刷屏。",
 ].join("\n");
 
 /** 给一个 promise 套超时；超时抛错，标签进 error.message，方便日志里认出是哪一步。 */
@@ -74,7 +75,8 @@ export function formatPendingPrompt(item, moods = null) {
     );
     lines.push("别人说的话不一定是在问你；拿不准就少说一句，别硬刷存在感。");
     lines.push(
-      "轻松的话顺手带一个情绪对得上的表情（text 和 stickerMood 一起给），两三句里带一次就行；正经讨论别带。",
+      "带表情：只要这句是轻松、吐槽、玩梗、起哄、被逗笑之类，**默认就一起给 stickerMood**；" +
+        "引擎自己按概率和冷却决定真发不发（给多了不会刷屏），所以不用省。只有正经安排事情、说正事才只发文字。",
     );
   }
 
@@ -105,12 +107,12 @@ export function formatPendingPrompt(item, moods = null) {
   lines.push("");
   lines.push(
     [
-      "要回的话，调用工具 wechat_reply_pending：",
-      `  {"id":"${item?.id ?? ""}","text":"你要发的那一句"}`,
-      "文字和表情可以一起给（先发文字，再补一个表情）：",
+      "要回的话，调用工具 wechat_reply_pending。最常用的写法是「一句话 + 一个情绪对得上的表情」：",
       `  {"id":"${item?.id ?? ""}","text":"这句话说完再补个表情","stickerMood":"无语"}`,
-      "只回一个表情也可以（不写字）：",
-      `  {"id":"${item?.id ?? ""}","stickerMood":"无语"}`,
+      "只发文字（正经事、或者情绪对不上任何一张）：",
+      `  {"id":"${item?.id ?? ""}","text":"这句说完就完了"}`,
+      "只回一个表情（被逗笑、无语、懒得打字）：",
+      `  {"id":"${item?.id ?? ""}","stickerMood":"嘲讽"}`,
       "不确定库里有没有合适的情绪，就先调 wechat_stickers 看一眼。",
       "不想回就调用 wechat_skip_pending：",
       `  {"id":"${item?.id ?? ""}","reason":"为什么不回"}`,

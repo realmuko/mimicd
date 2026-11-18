@@ -457,7 +457,8 @@ export function apply(ctx) {
         text: { type: "string", description: "要发出的那句话（可以不给，只发表情）" },
         stickerMood: {
           type: "string",
-          description: "想补一个表情时给：开心/无语/敷衍/惊讶/亲昵/嘲讽/委屈（可与 text 同时给，先文字后表情）",
+          description:
+            "轻松/吐槽/玩梗/情绪化的回复默认一起给：开心/无语/敷衍/惊讶/亲昵/嘲讽/委屈（可与 text 同时给，先文字后表情）。引擎自己按概率和冷却决定发不发，给了不会刷屏。",
         },
       },
       required: ["id"],

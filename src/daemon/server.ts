@@ -289,7 +289,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
         }
         deps.eventLog.append(
           "note",
-          { stage: "handoff-writeback", chat: item.chat, repliedTo: lastOtherId ?? null, cooldownMs: deps.perChatCooldownMs ?? DEFAULT_HANDOFF_COOLDOWN_MS },
+          {
+            stage: "handoff-writeback",
+            chat: item.chat,
+            repliedTo: lastOtherId ?? null,
+            cooldownMs: deps.perChatCooldownMs ?? DEFAULT_HANDOFF_COOLDOWN_MS,
+            // 主模型有没有给表情：排查「一直不带表情」第一眼看这个（null = 没给）
+            mood: stickerMood ?? null,
+          },
           { src: "handoff" },
         );
       } catch (err) {
