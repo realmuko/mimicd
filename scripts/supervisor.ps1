@@ -140,20 +140,23 @@ function PidOnPort {
 }
 
 function Start-Daemon {
-  $pid = PidOnPort
-  if ($pid -gt 0) {
-    Log ('engine: killing pid ' + $pid)
-    try { taskkill /F /PID $pid 2>$null | Out-Null } catch {}
+  # 注意：$pid 是 PowerShell 的只读自动变量（当前进程 id），赋给它直接抛
+  # "VariableNotWritable"，整个 supervisor 刚好在最需要重启时挂掉（2026-11-19 14:05 实测：
+  # 引擎死了两小时，任务每次 exit 1，日志里只剩一句 health unreachable）。
+  $daemonPid = PidOnPort
+  if ($daemonPid -gt 0) {
+    Log ('engine: killing pid ' + $daemonPid)
+    try { taskkill /F /PID $daemonPid 2>$null | Out-Null } catch {}
     Start-Sleep -Seconds 2
   }
   if ((PidOnPort) -gt 0) { Log 'engine: port still busy, skip start'; return }
-  $args = @(
-    (Join-Path $Root 'tools\daemon.ts'),
-    '--adb', $Adb, '--serial', $Serial,
-    '--launch-wechat', '--ime-restore', $ImeRestore
-  )
+  # 一条命令行 + 显式引号。Start-Process 的 -ArgumentList 数组只是「用空格拼起来」，
+  # 不会替带空格的路径加引号：adb 在 "<dsh>\..."，拼出来 daemon 拿到的是
+  # "D:\deepseek"，起来就 spawn ENOENT 退掉（2026-11-19 实测）。
+  $argLine = '"{0}" --adb "{1}" --serial "{2}" --launch-wechat --ime-restore "{3}"' -f `
+    (Join-Path $Root 'tools\daemon.ts'), $Adb, $Serial, $ImeRestore
   try {
-    Start-Process -FilePath $Node -ArgumentList $args -WorkingDirectory $Root -WindowStyle Hidden `
+    Start-Process -FilePath $Node -ArgumentList $argLine -WorkingDirectory $Root -WindowStyle Hidden `
       -RedirectStandardOutput $DaemonLog -RedirectStandardError ($DaemonLog + '.err')
     Log 'engine: daemon started'
   } catch {
@@ -202,6 +205,18 @@ Ensure-Injector | Out-Null
 
 $h = Get-EngineHealth
 if ($null -eq $h) {
+  # 刚起的引擎要 20~60s 才把 HTTP 端口开出来（先重置 adb server、再 forward、再 ping 注入器）。
+  # 这个窗口里 /health 也是连不上，直接杀掉重起会一直掐死在启动半路（2026-11-19 的抖动就是这么来的）。
+  $running = PidOnPort
+  if ($running -gt 0) {
+    $ageSec = 999
+    try { $ageSec = ((Get-Date) - (Get-Process -Id $running).StartTime).TotalSeconds } catch {}
+    if ($ageSec -lt 90) {
+      Log ('engine: health unreachable but pid ' + $running + ' 才起 ' + [int]$ageSec + 's，先让它起完')
+      Set-Heartbeat 'engine-starting'
+      exit 0
+    }
+  }
   Log 'engine: health unreachable'
   Start-Daemon
   Set-Heartbeat 'engine-restarted'
