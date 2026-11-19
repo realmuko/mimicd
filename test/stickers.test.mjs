@@ -127,3 +127,37 @@ test("fingerprint：不同图不同 id，同一图稳定", () => {
   assert.equal(fingerprint(a.dhash, a.hist), fingerprint(a.dhash, a.hist));
   assert.notEqual(fingerprint(a.dhash, a.hist), fingerprint("f0f0f0f0f0f0f0f0", a.hist));
 });
+// 2026-11-19：findByFeatures 以前是「先挑直方图最高的那张，再拿它的 dHash 复核」——
+// 只要库里有一张别的高分但 dHash 对不上的贴纸挡在前面，真正那张就永远认不出来，
+// 于是同一张贴纸被反复当成新的收进来（用户看到的就是「库里重复收藏」）。
+test("认图：高分但 dHash 对不上的条目不能把真正那张挡住", () => {
+  const lib = new StickerLibrary();
+  // A：直方图和输入完全一致，但 dHash 差 63 位（其实是另一张黑白梗图）
+  lib.upsert({
+    dhash: "ffffffffffffffff",
+    hist: [1, ...Array(63).fill(0)],
+    mood: "嘲讽",
+    tags: [],
+    funny: 0.8,
+    source: "received",
+  });
+  // B：直方图 0.965，dHash 只差 1 位（这才是同一张）
+  lib.upsert({
+    dhash: "0000000000000000",
+    hist: [0.965, Math.sqrt(1 - 0.965 * 0.965), ...Array(62).fill(0)],
+    mood: "无语",
+    tags: [],
+    funny: 0.6,
+    source: "received",
+  });
+  const hit = lib.findByFeatures([1, ...Array(63).fill(0)], "0000000000000001");
+  assert.equal(hit?.mood, "无语");
+});
+
+test("认图：dHash 都在范围内时还是取直方图最像的", () => {
+  const lib = new StickerLibrary();
+  lib.upsert({ dhash: "0000000000000002", hist: [0.97, 0.243, ...Array(62).fill(0)], mood: "开心", tags: [], funny: 0.5, source: "received" });
+  lib.upsert({ dhash: "0000000000000001", hist: [0.99, 0.141, ...Array(62).fill(0)], mood: "嘲讽", tags: [], funny: 0.5, source: "received" });
+  const hit = lib.findByFeatures([1, ...Array(63).fill(0)], "0000000000000000");
+  assert.equal(hit?.mood, "嘲讽");
+});

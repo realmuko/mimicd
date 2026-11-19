@@ -657,21 +657,30 @@ export class SkillRunner {
           }
           const piece = crop(bmp, bubble.rect);
           const feat = stickerFeatures(piece);
-          const known = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash);
-          // 这张已经收过：继续看上一张，别停在这里（否则同一个会话永远只收得到最新那一张）
-          if (known?.collectedAt) continue;
+          // 认「是不是已经有这张」分两档：
+          //   严格档（0.96/14 位）用来复用库里的条目（同一张换个帧，不该再建一条）；
+          //   放宽档（0.95/22 位）只用来判断「微信里是不是已经收藏过」—— 认成收过就不点「添加」，
+          //   于是不会把已经收藏的那张刷回收藏列表最前面（2026-11-19 用户指出）。
+          //   放宽档**不**拿来建/改条目：实测它会把「cosplay 合影」和「调侃梗图」认成同一张。
+          const strict = this.#deps.stickers.findByFeatures(feat.hist, feat.dhash);
+          const loose = strict ?? this.#deps.stickers.findByFeatures(feat.hist, feat.dhash, 0.95, 22);
+          if (loose?.collectedAt) continue;
 
-          const label = known
-            ? { mood: known.mood, tags: known.tags, funny: known.funny }
+          const label = loose
+            ? { mood: loose.mood, tags: loose.tags, funny: loose.funny }
             : await this.#deps.labeler.label(piece);
-          const entry = this.#deps.stickers.upsert({
-            dhash: feat.dhash,
-            hist: feat.hist,
-            mood: label.mood,
-            tags: label.tags ?? [],
-            funny: label.funny,
-            source: "received",
-          });
+          // 严格档认出来的就在原条目上刷新特征（换个 id 会凭空多一条重复）
+          const entry = this.#deps.stickers.upsert(
+            {
+              dhash: feat.dhash,
+              hist: feat.hist,
+              mood: label.mood,
+              tags: label.tags ?? [],
+              funny: label.funny,
+              source: "received",
+            },
+            strict ? { id: strict.id } : {},
+          );
           this.#deps.stickers.save();
 
           if (entry.funny < threshold) continue; // 不够好玩，试上一张

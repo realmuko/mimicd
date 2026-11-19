@@ -68,13 +68,32 @@ export class StickerLibrary {
     return this.#entries.size;
   }
 
+  /** 删掉一条（去重合并用）。 */
+  delete(id: string): boolean {
+    return this.#entries.delete(id);
+  }
+
+  /** 就地替换一条（合并后的结果写回去用）。 */
+  replace(entry: StickerEntry): void {
+    this.#entries.set(entry.id, entry);
+  }
+
   list(): StickerEntry[] {
     return [...this.#entries.values()];
   }
 
-  /** 新增或更新（同 id 保留已有标签与发送记录）。 */
-  upsert(partial: Omit<StickerEntry, "id" | "firstSeenAt" | "sends"> & Partial<Pick<StickerEntry, "firstSeenAt" | "sends">>): StickerEntry {
-    const id = fingerprint(partial.dhash, partial.hist);
+  /**
+   * 新增或更新（同 id 保留已有标签与发送记录）。
+   *
+   * `opts.id` 用于「认出来是库里已有的那张、但这次看到的是另一帧」：不带 id 时会按
+   * fingerprint(dhash,hist) 算出一个新 id —— 动图每帧算出来都不一样，库就被同一张贴纸
+   * 塞满了（2026-11-19 用户指出）。带上 id 就地更新特征，不新增条目。
+   */
+  upsert(
+    partial: Omit<StickerEntry, "id" | "firstSeenAt" | "sends"> & Partial<Pick<StickerEntry, "firstSeenAt" | "sends">>,
+    opts: { id?: string } = {},
+  ): StickerEntry {
+    const id = opts.id ?? fingerprint(partial.dhash, partial.hist);
     const existing = this.#entries.get(id);
     const entry: StickerEntry = {
       id,
@@ -103,11 +122,13 @@ export class StickerLibrary {
     for (const entry of this.#entries.values()) {
       const score = cosine(hist, entry.hist);
       if (score < threshold) continue;
+      // 先过 dHash 再看分数。以前是「先挑分数最高的，再拿它的 dHash 复核」——
+      // 只要库里有一张别的高分但 dHash 对不上的贴纸挡在前面，真正那张就被挡掉，
+      // 返回 null，于是同一张口口声声「没见过」，又收一遍、又建一条（2026-11-19 查出来的）。
+      if (hamming(dhash, entry.dhash) > maxHamming) continue;
       if (!best || score > best.score) best = { entry, score };
     }
-    if (!best) return null;
-    // dHash 复核：太松会把不同的贴纸认成同一张（真机上算错过发送统计和情绪）
-    return hamming(dhash, best.entry.dhash) <= maxHamming ? best.entry : null;
+    return best?.entry ?? null;
   }
 
   /**
