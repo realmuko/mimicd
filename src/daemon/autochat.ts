@@ -45,6 +45,11 @@ export interface AutoChatConfig {
   collectPerHour?: number;
   /** 交接模式：policy 决定要回后，把上下文交给主模型，引擎不自己编话也不发 */
   handoff?: (ctx: BrainContext) => Promise<string>;
+  /**
+   * 欠账（unsent）超过这么久就不再追（默认 30 分钟）。
+   * 隔了几个小时的「补发」不是回复，是诈尸：旧的那个群早聊完了，回去补 15 条只会刷屏。
+   */
+  unsentMaxAgeMin?: number;
 }
 
 export const DEFAULT_AUTOCHAT: AutoChatConfig = {
@@ -52,6 +57,7 @@ export const DEFAULT_AUTOCHAT: AutoChatConfig = {
   rowTapX: 300,
   perChatCooldownMs: 5 * 60 * 1000,
   maxBackSteps: 3,
+  unsentMaxAgeMin: 30,
 };
 
 export interface TickResult {
@@ -166,30 +172,57 @@ export class AutoChat {
     if (this.forceChatOnce) this.forceChatOnce = undefined;
 
     if (forced) {
-      // 定向模式：不要求未读，直接在列表 OCR 里找这个名字
+      // 定向模式：不要求未读。先在列表 OCR 里找这一行，并用白名单规范名归一化
+      // （列表那行可能被 OCR 读歪，比如「以摸鱼…」；后面所有 patch 都按名字走）。
       const want = forced.replace(/\s+/g, "");
       const hit = listOcr.lines.find((l) => isNameLine(l) && cleanName(l.text).includes(want));
-      if (!hit) return { acted: false, reason: `列表里没找到「${forced}」`, ms: Date.now() - t0 };
-      // 用白名单里的规范名：列表那行可能被 OCR 读歪（「以摸鱼…」），
-      // 后面所有 patch / 白名单判断都按名字走，用歪名字就进不去。
-      const hitName = cleanName(hit.text);
-      name = (this.#cfg.policy.whitelist ?? []).find((n) => sameChatName(n, hitName)) ?? hitName;
-      rowY = hit.y + hit.h / 2;
-      d.eventLog?.append("note", { stage: "force-chat", hit: { text: hit.text, y: hit.y, h: hit.h }, tapY: Math.round(rowY) }, { src: "monitor" });
+      if (hit) {
+        const hitName = cleanName(hit.text);
+        name = (this.#cfg.policy.whitelist ?? []).find((n) => sameChatName(n, hitName)) ?? hitName;
+        rowY = hit.y + hit.h / 2;
+        d.eventLog?.append("note", { stage: "force-chat", hit: { text: hit.text, y: hit.y, h: hit.h }, tapY: Math.round(rowY) }, { src: "monitor" });
+      } else {
+        // 这一屏里没有它 ≠ 进不去：群名会被读歪、也可能要滚动才出现。
+        // 直接返回「列表里没找到」的话，补发欠账（靠定向模式进会话）就永远补不出去——
+        // 每两拍空转一次的死循环（2026-11-19 真机卡了 10 小时）。交给 enterChat 的搜索兜底。
+        name = (this.#cfg.policy.whitelist ?? []).find((n) => sameChatName(n, forced)) ?? forced;
+        d.eventLog?.append("note", { stage: "force-chat-search", chat: name }, { src: "monitor" });
+      }
     } else {
       const wl = (this.#cfg.policy.whitelist ?? []).slice();
       // 「欠着没回」的消息（冷却 / 合并窗口期间攒下的）。微信只要进过一次会话就把红点清了，
       // 列表扫描永远发现不了它们 —— 不主动回去补发，这些消息就再没人理了
       // （旧插件的 flushPending 就是干这个的）。
+      const unsentMaxAgeMs = (this.#cfg.unsentMaxAgeMin ?? 30) * 60_000;
       const owedFirst = () => {
         const chats = d.world.snapshot().chats ?? {};
-        return d.world.listUnsent().find((x) => {
-          if (!(wl.length === 0 || wl.some((n) => sameChatName(n, x.name)))) return false;
+        for (const x of d.world.listUnsent()) {
+          if (!(wl.length === 0 || wl.some((n) => sameChatName(n, x.name)))) continue;
+          // 太旧的欠账不再追：隔了半个钟头以上才「补发」，对话早翻篇了。
+          // 一条都不剩就把这个会话的欠账清掉，否则它会一直霸占队首、每两拍空转。
+          const items = d.world.peekUnsent(x.name);
+          const fresh = items.filter((m) => Date.now() - (m.firstSeenAt ?? 0) <= unsentMaxAgeMs);
+          if (fresh.length === 0) {
+            d.world.clearUnsent(x.name);
+            d.eventLog?.append("note", { stage: "unsent-expired", chat: x.name, count: items.length }, { src: "policy" });
+            continue;
+          }
+          if (fresh.length < items.length) {
+            d.world.clearUnsent(x.name);
+            d.world.queueUnsent(x.name, fresh);
+            d.eventLog?.append(
+              "note",
+              { stage: "unsent-partial-expire", chat: x.name, dropped: items.length - fresh.length },
+              { src: "policy" },
+            );
+          }
           // 还在会话冷却里就先别回去：进去了 policy 也只会再判一次「冷却中，先攒着」，
           // 白白多一轮进会话 + 十几张截图（真机每 20 秒重复撞到过一次）。
           const cooldown = chats[x.name]?.cooldownUntil ?? 0;
-          return cooldown <= Date.now();
-        });
+          if (cooldown > Date.now()) continue;
+          return { name: x.name, count: fresh.length };
+        }
+        return undefined;
       };
 
       // 回去补发：靠 forceChatOnce 下一拍定向进这个会话（定向模式不要求红点）。

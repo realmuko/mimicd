@@ -166,9 +166,13 @@ test("actuator：单写者 —— 并发调用按顺序执行，不交错", asyn
   assert.deepEqual(order, ["start-1", "end-1", "start-2", "end-2", "start-3", "end-3"]);
 });
 
-test("actuator：一个动作失败不会卡死后续动作", async () => {
+test("actuator：注入器挂了不会卡死后续动作（退回 adb shell input）", async () => {
   const calls = [];
   const dev = fakeDevice(calls);
+  dev.adb.shell = async (cmd) => {
+    calls.push(["adb", cmd]);
+    return "";
+  };
   let first = true;
   dev.injector.tap = async () => {
     if (first) {
@@ -178,7 +182,9 @@ test("actuator：一个动作失败不会卡死后续动作", async () => {
     calls.push(["tap-ok"]);
   };
   const act = new Actuator(dev, { rng: createRng(1) });
-  await assert.rejects(() => act.tapPoint(1, 1));
-  await act.tapPoint(2, 2);
-  assert.deepEqual(calls, [["tap-ok"]]);
+  const r1 = await act.tapPoint(1, 1); // 第一次：注入器失败 → 退回 adb
+  await act.tapPoint(2, 2); // 第二次照常
+  assert.equal(r1.detail.via, "adb");
+  assert.ok(String(calls[0]?.[1] ?? "").startsWith("input tap"), "应退回 adb shell input");
+  assert.deepEqual(calls.at(-1), ["tap-ok"]);
 });
