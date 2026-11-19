@@ -22,6 +22,7 @@ import { SkillRunner } from "../src/skills/runner.ts";
 import { Ocr } from "../src/perception/ocr.ts";
 import { StickerLibrary } from "../src/stickers/library.ts";
 import { StickerLabeler } from "../src/stickers/labeler.ts";
+import { inferMood } from "../src/stickers/mood.ts";
 import { detectPage, decodeFrame, rectOf, type PageGraph } from "../src/perception/page.ts";
 import { cleanName, isNameLine } from "../src/monitor/scan.ts";
 import { enterChat as navigateEnterChat } from "../src/daemon/navigate.ts";
@@ -62,7 +63,7 @@ interface FileConfig {
   /** 主动搭话（dsh-speak-up 掷骰子决定，引擎这边只负责限额与发送） */
   proactive?: { maxPerHour?: number; maxPerDay?: number; minGapMs?: number; allowGroups?: boolean };
   /** 回复里「带表情」的节制：概率 + 同会话冷却 */
-  reply?: { stickerChance?: number; stickerCooldownMin?: number };
+  reply?: { stickerChance?: number; stickerCooldownMin?: number; stickerFallback?: boolean };
   autochat?: Partial<AutoChatConfig> & { collectEveryMin?: number };
   brain?:
     | { kind: "scripted"; template?: string }
@@ -462,17 +463,24 @@ type ReplyKind = { text?: string; stickerMood?: string };
 const replyCfg = {
   stickerChance: fileConfig.reply?.stickerChance ?? 0.5,
   stickerCooldownMin: fileConfig.reply?.stickerCooldownMin ?? 10,
+  /** 模型没给情绪时，引擎按文字猜一个补上（2026-11-19：某个群 21 条全军覆没，全是裸文字） */
+  stickerFallback: fileConfig.reply?.stickerFallback ?? true,
 };
 const lastStickerAt = new Map<string, number>();
 
-async function sendReply(chat: string, kind: ReplyKind): Promise<{ ok: boolean; reason?: string }> {
+
+
+async function sendReply(
+  chat: string,
+  kind: ReplyKind,
+): Promise<{ ok: boolean; reason?: string; textSent?: boolean; stickerSent?: boolean; mood?: string }> {
   return exclusive("send", () => sendReplyInner(chat, kind), 90000);
 }
 
 async function sendReplyInner(
   chat: string,
   kind: ReplyKind,
-): Promise<{ ok: boolean; reason?: string; textSent?: boolean; stickerSent?: boolean }> {
+): Promise<{ ok: boolean; reason?: string; textSent?: boolean; stickerSent?: boolean; mood?: string }> {
   if (!(await enterChat(chat))) return { ok: false, reason: `进不到会话「${chat}」` };
 
   let textSent = false;
@@ -481,6 +489,16 @@ async function sendReplyInner(
 
   // 先说话，再补一个表情（用户 2026-11-17：回复后可以带个对应情绪的表情）
   const text = (kind.text ?? "").trim();
+
+  // 情绪：模型给了用模型的；没给就按文字兜底猜一个。
+  // 2026-11-19 实测：当天 10 条回复里 7 条 mood=null（某个群 10:40 之后全是裸文字），
+  // 概率 0.8 / 冷却 5min 这两道闸一次都没触发 —— 根本没走到那一步。
+  // 光在提示词里喊「默认带表情」不够：模型漏给就等于永远没有，兜底得落在引擎这边。
+  const mood = kind.stickerMood ?? (replyCfg.stickerFallback && text ? inferMood(text) : undefined);
+  if (kind.stickerMood === undefined && mood !== undefined) {
+    eventLog.append("note", { stage: "sticker-mood-fallback", chat, mood }, { src: "handoff" });
+  }
+
   if (text) {
     const skill = registry.get("wechat.send_text");
     if (!skill) return { ok: false, reason: "没有 wechat.send_text 技能" };
@@ -493,7 +511,7 @@ async function sendReplyInner(
   }
 
   // 回复里「顺带一个表情」要过概率 + 冷却；只发一个表情（不写字）不过闸，那是模型明确选择
-  if (kind.stickerMood !== undefined && text) {
+  if (mood !== undefined && text) {
     const last = lastStickerAt.get(chat) ?? 0;
     const cooldownMs = replyCfg.stickerCooldownMin * 60 * 1000;
     const cooling = cooldownMs > 0 && Date.now() - last < cooldownMs;
@@ -510,13 +528,13 @@ async function sendReplyInner(
         },
         { src: "handoff" },
       );
-      if (textSent) return { ok: true, textSent, stickerSent: false };
+      if (textSent) return { ok: true, textSent, stickerSent: false, mood };
     }
   }
 
   // 发表情不走输入法，也不需要切 IME；但发完文字键盘还开着，
   // 表情按钮/面板的位置会被顶上去 —— 先收键盘（真机踩过：面板没打开，扫的是聊天区）
-  if (kind.stickerMood !== undefined) {
+  if (mood !== undefined) {
     try {
       const imeDump = await adb.shell("dumpsys input_method", 20000);
       const shown = /mInputShown=true/.test(imeDump);
@@ -538,21 +556,22 @@ async function sendReplyInner(
         ok: textSent,
         reason: textSent ? `文字已发；退到 ${beforeSticker.page} 后进不回「${chat}」，表情没发` : `进不到会话「${chat}」`,
         textSent,
+        mood,
       };
     }
     const skill = registry.get("wechat.send_sticker_mood");
-    if (!skill) return { ok: textSent, reason: textSent ? "文字已发，但没有 send_sticker_mood 技能" : "没有 send_sticker_mood 技能", textSent };
-    const result = await skillsRunner.run(skill, { mood: kind.stickerMood });
+    if (!skill) return { ok: textSent, reason: textSent ? "文字已发，但没有 send_sticker_mood 技能" : "没有 send_sticker_mood 技能", textSent, mood };
+    const result = await skillsRunner.run(skill, { mood });
     if (!result.ok) {
       reason = textSent ? `文字已发，表情没发出去：${result.reason ?? "未知原因"}` : result.reason;
-      return { ok: false, reason, textSent, stickerSent };
+      return { ok: false, reason, textSent, stickerSent, mood };
     }
     stickerSent = true;
     lastStickerAt.set(chat, Date.now());
   }
 
   if (!textSent && !stickerSent) return { ok: false, reason: "text 和 stickerMood 都是空的" };
-  return { ok: true, textSent, stickerSent };
+  return { ok: true, textSent, stickerSent, ...(mood !== undefined ? { mood } : {}) };
 }
 
 // ---- 主动搭话：谁决定开口是 dsh-speak-up 的事，这里只管「限额 + 真的发出去」 ----

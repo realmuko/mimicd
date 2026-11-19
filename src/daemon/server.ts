@@ -46,7 +46,14 @@ export interface DaemonDeps {
   sendReply?: (
     chat: string,
     kind: { text?: string; stickerMood?: string },
-  ) => Promise<{ ok: boolean; reason?: string; textSent?: boolean; stickerSent?: boolean }>;
+  ) => Promise<{
+    ok: boolean;
+    reason?: string;
+    textSent?: boolean;
+    stickerSent?: boolean;
+    /** 实际用到的情绪（模型给的，或引擎兜底猜的）；诊断「到底带没带表情」看这个 */
+    mood?: string;
+  }>;
   /** 主动搭话：dsh-speak-up 掷中后由主模型调过来，引擎负责限额与发送 */
   say?: (chat: string, kind: { text?: string; stickerMood?: string }) => Promise<{ ok: boolean; reason?: string; refused?: string }>;
   /** 读链接（交接模式的「眼睛」） */
@@ -294,8 +301,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
             chat: item.chat,
             repliedTo: lastOtherId ?? null,
             cooldownMs: deps.perChatCooldownMs ?? DEFAULT_HANDOFF_COOLDOWN_MS,
-            // 主模型有没有给表情：排查「一直不带表情」第一眼看这个（null = 没给）
+            // 主模型有没有给表情、最后到底发出去没有：排查「一直不带表情」第一眼看这两行
+            // （mood=null 且 usedMood 有值 = 模型漏给、引擎兜底猜的；usedMood 有值但 stickerSent=false = 闸/面板没成）
             mood: stickerMood ?? null,
+            usedMood: result.mood ?? stickerMood ?? null,
+            stickerSent,
           },
           { src: "handoff" },
         );
