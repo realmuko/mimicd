@@ -69,11 +69,34 @@ export class Actuator {
     this.#log?.append("action.executed", { ...record }, { src: "act.actuator" });
   }
 
+  /**
+   * 触摸动作的统一出口：先走手机上的注入器（app_process，压力/时长可控），
+   * 注入器挂了（被系统杀掉 / 端口没了）就退回 adb shell input —— 慢一点、少了拟真参数，
+   * 但不会因为一个后台进程死掉就整条链路瘫痪（2026-11-19 早上的教训）。
+   */
+  async #touch(kind: "tap" | "hold" | "swipe", run: () => Promise<void>, fallback: () => Promise<void>): Promise<string> {
+    try {
+      await run();
+      return "injector";
+    } catch (err) {
+      const msg = String((err as Error)?.message ?? err).slice(0, 140);
+      this.#log?.append("note", { stage: "injector-fallback", op: kind, error: msg }, { src: "act.actuator" });
+      await fallback();
+      return "adb";
+    }
+  }
+
   async tapPoint(x: number, y: number, downMs = 65): Promise<ActionRecord> {
     return this.#enqueue(async () => {
       const t0 = Date.now();
-      if (!this.#dryRun) await this.#dev.injector.tap(x, y, downMs);
-      const rec: ActionRecord = { kind: "tap", ms: Date.now() - t0, detail: { x, y, downMs, dryRun: this.#dryRun } };
+      const via = this.#dryRun
+        ? "dry"
+        : await this.#touch(
+            "tap",
+            () => this.#dev.injector.tap(x, y, downMs),
+            () => this.#dev.adb.shell(`input tap ${Math.round(x)} ${Math.round(y)}`, 20000).then(() => undefined),
+          );
+      const rec: ActionRecord = { kind: "tap", ms: Date.now() - t0, detail: { x, y, downMs, via, dryRun: this.#dryRun } };
       this.#emit(rec);
       return rec;
     });
@@ -83,11 +106,17 @@ export class Actuator {
     const plan = planTap(rect, this.#rng, this.#humanizer);
     return this.#enqueue(async () => {
       const t0 = Date.now();
-      if (!this.#dryRun) await this.#dev.injector.tap(plan.x, plan.y, plan.downMs);
+      const via = this.#dryRun
+        ? "dry"
+        : await this.#touch(
+            "tap",
+            () => this.#dev.injector.tap(plan.x, plan.y, plan.downMs),
+            () => this.#dev.adb.shell(`input tap ${Math.round(plan.x)} ${Math.round(plan.y)}`, 20000).then(() => undefined),
+          );
       const rec: ActionRecord = {
         kind: "tap",
         ms: Date.now() - t0,
-        detail: { ...plan, rect, dryRun: this.#dryRun },
+        detail: { ...plan, rect, via, dryRun: this.#dryRun },
       };
       this.#emit(rec);
       return rec;
@@ -98,11 +127,17 @@ export class Actuator {
     const plan = planHold(rect, this.#rng, this.#humanizer);
     return this.#enqueue(async () => {
       const t0 = Date.now();
-      if (!this.#dryRun) await this.#dev.injector.hold(plan.x, plan.y, plan.ms);
+      const via = this.#dryRun
+        ? "dry"
+        : await this.#touch(
+            "hold",
+            () => this.#dev.injector.hold(plan.x, plan.y, plan.ms),
+            () => this.#dev.adb.shell(`input swipe ${Math.round(plan.x)} ${Math.round(plan.y)} ${Math.round(plan.x)} ${Math.round(plan.y)} ${Math.round(plan.ms)}`, 20000).then(() => undefined),
+          );
       const rec: ActionRecord = {
         kind: "hold",
         ms: Date.now() - t0,
-        detail: { ...plan, rect, dryRun: this.#dryRun },
+        detail: { ...plan, rect, via, dryRun: this.#dryRun },
       };
       this.#emit(rec);
       return rec;
@@ -113,11 +148,19 @@ export class Actuator {
     const plan = planSwipe(from, to, this.#rng, { durationMs });
     return this.#enqueue(async () => {
       const t0 = Date.now();
-      if (!this.#dryRun) await this.#dev.injector.path(plan.points);
+      const first = plan.points[0]!;
+      const last = plan.points[plan.points.length - 1]!;
+      const via = this.#dryRun
+        ? "dry"
+        : await this.#touch(
+            "swipe",
+            () => this.#dev.injector.path(plan.points),
+            () => this.#dev.adb.shell(`input swipe ${Math.round(first.x)} ${Math.round(first.y)} ${Math.round(last.x)} ${Math.round(last.y)} ${Math.round(plan.durationMs)}`, 20000).then(() => undefined),
+          );
       const rec: ActionRecord = {
         kind: "swipe",
         ms: Date.now() - t0,
-        detail: { from, to, durationMs: plan.durationMs, points: plan.points.length, dryRun: this.#dryRun },
+        detail: { from, to, durationMs: plan.durationMs, points: plan.points.length, via, dryRun: this.#dryRun },
       };
       this.#emit(rec);
       return rec;

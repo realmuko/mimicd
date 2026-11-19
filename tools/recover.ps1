@@ -1,4 +1,4 @@
-# 手机回来后一键恢复：等设备 → 重新部署注入器 → 起引擎
+﻿# 手机回来后一键恢复：等设备 → 重新部署注入器 → 起引擎
 #
 #   powershell -ExecutionPolicy Bypass -File <repo>\tools\recover.ps1
 #

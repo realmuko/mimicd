@@ -88,6 +88,8 @@ export class Ocr {
         encoding: "utf8",
         timeout: 30000,
         maxBuffer: 8 * 1024 * 1024,
+        // 必须带上：不然每做一次 OCR 就在桌面上闪一个 PowerShell 窗口（一轮 tick 好几次）
+        windowsHide: true,
       });
       const parsed = JSON.parse(stdout.trim()) as { lines?: OcrLine[] };
       const lines = (parsed.lines ?? []).map((l) => ({

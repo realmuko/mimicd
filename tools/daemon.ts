@@ -80,6 +80,36 @@ try {
   // 没有配置文件就用默认值
 }
 
+/**
+ * 静默时段也能用命令行临时盖掉（优先于 data/config.json 的 policy.quietHours）：
+ *   --quiet-hours 2-7    2 点到 7 点不说话（跨零点也行，比如 23-8）
+ *   --quiet-hours off    关掉静默时段
+ */
+const quietArg = arg("quiet-hours", "");
+if (quietArg) {
+  const parsed = parseQuietHours(quietArg);
+  if (parsed === undefined) {
+    console.error(`--quiet-hours 参数看不懂："${quietArg}"。用法：2-7（或 23-8、1-6），关掉用 off。`);
+    process.exit(6);
+  }
+  fileConfig.policy = { ...(fileConfig.policy ?? {}), quietHours: parsed };
+  console.log(
+    parsed ? `[policy] 静默时段（命令行覆盖）：${parsed[0]}–${parsed[1]} 点` : "[policy] 静默时段：关闭",
+  );
+}
+
+function parseQuietHours(raw: string): [number, number] | null | undefined {
+  const s = raw.trim().toLowerCase();
+  if (s === "off" || s === "none" || s === "no" || s === "0") return null;
+  const m = /^(\d{1,2})\s*(?:-|–|~|～|到)\s*(\d{1,2})$/.exec(s);
+  if (!m) return undefined;
+  const from = Number(m[1]);
+  const to = Number(m[2]) % 24;
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from > 23) return undefined;
+  if (from === to) return undefined; // 起止相同没有意义
+  return [from, to];
+}
+
 // 安全闸：真发模式下白名单为空 = 什么会话都可能回。先于连设备检查。
 const earlyWhitelist = (fileConfig.policy?.whitelist ?? []) as string[];
 if (!dryRun && !noSend && earlyWhitelist.length === 0 && !flag("allow-all")) {
