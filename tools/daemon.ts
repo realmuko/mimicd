@@ -339,6 +339,13 @@ const control = async (action: string, opts: { chat?: string } = {}): Promise<{ 
     case "resume":
       state.paused = false;
       return { ok: true, message: "已继续" };
+    case "restart":
+      // 改完引擎代码要重启才能生效；而 supervisor 是以管理员权限跑的，
+      // 普通权限的 shell 杀不掉它拉起来的 daemon（2026-11-19 实测 Stop-Process 静默失败）。
+      // 所以给个自尽的开关：退出后 supervisor 2 分钟内会把它拉起来，代码就是新的。
+      eventLog.append("note", { stage: "restart-requested", runId }, { src: "control" });
+      setTimeout(() => process.exit(0), 1200);
+      return { ok: true, message: "收到，1 秒后退出，等 supervisor 拉起新进程" };
     case "dry_run":
       actuator.setDryRun(true);
       state.dryRun = true;
