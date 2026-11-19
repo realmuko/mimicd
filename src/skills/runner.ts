@@ -60,6 +60,12 @@ export class SkillRunner {
   readonly #deps: RunnerDeps;
   /** obs.screenshot 带 tag 的帧，供 check 对比 */
   readonly #shots = new Map<string, import("../image/image.ts").Bitmap>();
+  /**
+   * 在收藏面板里怎么都找不到的目标 → 记录时间。
+   * 不记的话每轮都拿它当目标、白扫 6 屏，最后只能退回「最后一屏剩下的那张」，
+   * 一晚上反复发同一张（2026-11-19 22 点某个群就是这个现象）。
+   */
+  readonly #panelMiss = new Map<string, number>();
 
   constructor(deps: RunnerDeps) {
     this.#deps = deps;
@@ -505,23 +511,33 @@ export class SkillRunner {
         // 现在反过来：**先按情绪从整个库里挑目标**（最久没发过的那张），再一屏一屏往下滑
         // 把它找出来；找不到才退回「当前屏里最久没发过的那张」。
         const AVOID_MS = 20 * 60 * 1000;
+        const MISS_TTL_MS = 30 * 60 * 1000;
         const MAX_SCREENS = 6;
-        const pool: Cand[] = [];
+        type Located = Cand & { entry: Entry; screen: number };
+        const pool: Located[] = [];
         let screens = 0;
-        const addAll = (list: Cand[]): void => {
+        const addAll = (list: Cand[], screen: number): void => {
           for (const c of list) {
             if (!c.entry) continue;
-            if (!pool.some((p) => p.entry?.id === c.entry?.id)) pool.push(c);
+            if (!pool.some((p) => p.entry.id === c.entry!.id)) pool.push({ cell: c.cell, entry: c.entry, screen });
           }
         };
 
         // 面板会记住上次滑到哪儿，先无脑滑回顶部（到顶了再滑就是不动，没副作用）
         for (let i = 0; i < 4; i++) await swipePanel("top");
 
-        const wanted = this.#deps.stickers.pick(mood, { recentWindow: AVOID_MS, now: Date.now() });
+        const lib = this.#deps.stickers;
+        // 上一轮在面板里怎么都找不到的目标，这一轮直接换一个当目标。
+        // 不这么做的话：每轮都瞄同一个「库里存在但面板里认不出」的贴纸 → 扫满 6 屏仍找不到
+        // → 只能退回最后一屏剩下的那张 → 一晚上反复发同一张（2026-11-19 某个群）。
+        for (const [id, t] of this.#panelMiss) {
+          if (Date.now() - t > MISS_TTL_MS) this.#panelMiss.delete(id);
+        }
+        const wanted = lib.pick(mood, { recentWindow: AVOID_MS, now: Date.now(), exclude: new Set(this.#panelMiss.keys()) });
         let chosen: (Cand & { entry: Entry }) | null = null;
         let found = false;
         let lastScreen: Cand[] = [];
+        let screenIdx = 0;
 
         /** 这一屏里有没有目标那张：先看认出来的格子，再把认不出的格子单独跟目标比。 */
         const huntTarget = (
@@ -542,7 +558,8 @@ export class SkillRunner {
           if (s > 0) await swipePanel("down");
           let shot = await scanNow();
           screens++;
-          addAll(shot.cells);
+          screenIdx = s;
+          addAll(shot.cells, s);
           lastScreen = shot.cells;
           if (s === 0 && shot.cells.length === 0) {
             // 面板可能停在别的 tab（表情 / 搜索）——切到收藏再扫这一屏。
@@ -553,7 +570,7 @@ export class SkillRunner {
             await sleep(500);
             shot = await scanNow();
             screens++;
-            addAll(shot.cells);
+            addAll(shot.cells, s);
             lastScreen = shot.cells;
           }
           if (wanted) {
@@ -568,19 +585,40 @@ export class SkillRunner {
           if (!wanted && pool.length > 0) break;
         }
 
-        // 目标在库里、但滑完 MAX_SCREENS 屏都没找出来：退回当前屏里最久没发过的那张。
-        // 只从最后一屏里挑 —— 前面几屏的格子坐标早就滑走了，点下去会点到别的东西。
+        // 目标没找到：不是「只从最后一屏里挑」，而是从**这一轮扫到的整池**里挑
+        // （整池通常有 20~30 条，最后一屏只有两三条，只挑最后一屏等于天天发同那张）。
+        // 挑中的如果在前几屏，就滑回那一屏再扫一次确认坐标 —— 滑走的格子坐标不能直接点。
         if (!chosen) {
-          const visible = lastScreen.filter((c): c is Cand & { entry: Entry } => Boolean(c.entry));
-          // 同样按「图」排重：库里可能有好几条其实同一张，各自发送时间不同，
-          // 只按 id 判「刚发过」会挑到它的翻版，发出来还是同一张。
-          const lib = this.#deps.stickers;
           const recent = lib.recentlySent(AVOID_MS);
-          const distinct = visible.filter((c) => !recent.some((r) => lib.isSamePicture(r, c.entry)));
-          const usable = distinct.length > 0 ? distinct : visible;
+          const distinct = pool.filter((c) => !recent.some((r) => lib.isSamePicture(r, c.entry)));
+          const usable = distinct.length > 0 ? distinct : pool;
           const picked = pickSticker(usable, mood, { now: Date.now(), avoidRecentMs: AVOID_MS });
-          chosen = (picked.chosen as (Cand & { entry: Entry }) | undefined) ?? null;
+          const cand = picked.chosen as Located | undefined;
+          if (cand) {
+            if (cand.screen === screenIdx) {
+              chosen = { cell: cand.cell, entry: cand.entry };
+            } else {
+              for (let i = 0; i < 4; i++) await swipePanel("top");
+              for (let i = 0; i < cand.screen; i++) await swipePanel("down");
+              const shot = await scanNow();
+              screens++;
+              const hit = huntTarget(shot, cand.entry);
+              if (hit) {
+                chosen = hit;
+                screenIdx = cand.screen;
+              }
+            }
+          }
+          if (!chosen) {
+            // 连滑回去都没认出来：至少把当前屏能点的给它，别整条技能失败
+            const here = lastScreen.filter((c): c is Cand & { entry: Entry } => Boolean(c.entry));
+            const p2 = pickSticker(here, mood, { now: Date.now(), avoidRecentMs: AVOID_MS });
+            chosen = (p2.chosen as (Cand & { entry: Entry }) | undefined) ?? null;
+            found = false;
+          }
         }
+        // 记下「这个目标在面板里找不到」，下一轮别再瞄它
+        if (wanted && !found) this.#panelMiss.set(wanted.id, Date.now());
         if (!chosen) {
           throw new SkillRunError(`面板里没有库里的贴纸（库里 ${this.#deps.stickers.size} 张；收藏可能还没收进来）`);
         }

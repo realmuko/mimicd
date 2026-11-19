@@ -203,3 +203,23 @@ test("recentlySent / isSamePicture：按图判，不按 id 判", () => {
   a.sends.push(now - 1000);
   assert.equal(lib.recentlySent(20 * 60 * 1000, now).length, 1);
 });
+
+// 2026-11-19 22 点某个群：目标一直是一个「库里存在但面板里认不出」的贴纸，
+// 每轮都拿它当目标、扫满 6 屏找不到，最后只能退回同一张。加上 exclude 之后要能换目标。
+test("挑图：exclude 掉面板里找不到的目标，换一张当目标", () => {
+  const lib = new StickerLibrary();
+  lib.upsert({ dhash: "0000000000000000", hist: [0.99, 0.141, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.9, source: "received" });
+  lib.upsert({ dhash: "ffffffffffffffff", hist: [0.2, 0.8, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.3, source: "received" });
+  const first = lib.pick("无语", { now: 0, recentWindow: 1 });
+  const second = lib.pick("无语", { now: 0, recentWindow: 1, exclude: new Set([first.id]) });
+  assert.ok(first && second);
+  assert.notEqual(second.id, first.id);
+});
+
+test("挑图：exclude 把候选清空时，还是要返回一张（不能因此没表情可发）", () => {
+  const lib = new StickerLibrary();
+  lib.upsert({ dhash: "0000000000000000", hist: [0.99, 0.141, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.9, source: "received" });
+  const only = lib.list()[0];
+  const picked = lib.pick("无语", { now: 0, recentWindow: 1, exclude: new Set([only.id]) });
+  assert.equal(picked?.id, only.id);
+});

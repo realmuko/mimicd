@@ -153,7 +153,10 @@ export class StickerLibrary {
    * 规则：情绪匹配优先 → 最久没发过 → 好玩程度高；并且**跳过任何跟最近发过的图看着一样的
    * 记录**（库里同一张可能有好几条，按 id 轮换等于没轮换）。
    */
-  pick(mood: string, opts: { recentWindow?: number; now?: number } = {}): StickerEntry | null {
+  pick(
+    mood: string,
+    opts: { recentWindow?: number; now?: number; exclude?: ReadonlySet<string> } = {},
+  ): StickerEntry | null {
     const now = opts.now ?? Date.now();
     const recentWindow = opts.recentWindow ?? 30 * 60 * 1000;
     const all = this.list();
@@ -161,7 +164,10 @@ export class StickerLibrary {
 
     const wanted = mood.trim();
     const same = wanted ? all.filter((e) => e.mood === wanted || e.tags.includes(wanted)) : all;
-    const pool = same.length > 0 ? same : all;
+    const poolAll = same.length > 0 ? same : all;
+    // exclude：这些目标「在面板里找不到」，别再拿它们当目标（否则每轮白扫、最后退回同一张）
+    const filtered = opts.exclude && opts.exclude.size > 0 ? poolAll.filter((e) => !opts.exclude!.has(e.id)) : poolAll;
+    const pool = filtered.length > 0 ? filtered : poolAll;
 
     const isRecent = (e: StickerEntry) =>
       e.sends.some((t) => now - t < recentWindow) && pool.length > 1;
