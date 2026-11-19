@@ -18,6 +18,7 @@ import { findDarkPanel, isMenuPanel } from "../perception/panel.ts";
 import { findStickerCells, type PanelGrid } from "../perception/cells.ts";
 import { findImageBubbles } from "../perception/bubbles.ts";
 import { stickerFeatures } from "../image/image.ts";
+import { pickSticker } from "../stickers/pick.ts";
 import { findCardTitle, findLinkCards } from "../perception/cards.ts";
 import { bubbleSide } from "../monitor/read.ts";
 import { looksLikeInputBar } from "../perception/page.ts";
@@ -479,13 +480,6 @@ export class SkillRunner {
           }
           return out;
         };
-        const pick = (list: Cand[]): Cand => {
-          const lastSentAt = (e: { sends: number[] }) => (e.sends.length > 0 ? Math.max(...e.sends) : 0);
-          const pool = mood ? list.filter((c) => c.entry.mood === mood || c.entry.tags.includes(mood)) : list;
-          return (pool.length > 0 ? pool : list)
-            .slice()
-            .sort((a, b) => lastSentAt(a.entry) - lastSentAt(b.entry) || b.entry.funny - a.entry.funny)[0]!;
-        };
         const scroll = async (dir: "top" | "down"): Promise<void> => {
           const y0 = Math.round(gridArea.y + gridArea.h * (dir === "down" ? 0.7 : 0.35));
           const stepPx = Math.round(scan.pitchY * screen.h);
@@ -494,9 +488,28 @@ export class SkillRunner {
           await sleep(350);
         };
 
+        // 候选池：先只有当前屏，需要时往下翻着往里加（按 entry.id 去重）。
+        // 一屏只有 7~8 格，不翻页的话「无语」经常整屏只有一张可用 —— 2026-11-19
+        // 用户的原话：「怎么一直发同一个表情，是不是点错了」。不是点错，是池子太小。
+        const SIMILAR_AVOID_MS = 20 * 60 * 1000;
+        const pool: Cand[] = [];
+        let screens = 0;
+        const addAll = (list: Cand[]): void => {
+          for (const c of list) {
+            if (!pool.some((p) => p.entry.id === c.entry.id)) pool.push(c);
+          }
+        };
+        const pickNow = () =>
+          pickSticker(pool, mood, { now: Date.now(), avoidRecentMs: SIMILAR_AVOID_MS });
+
         let chosen: Cand | null = null;
-        const here = await scanNow();
-        if (here.length > 0) chosen = pick(here);
+        let tooFresh = false;
+        addAll(await scanNow());
+        screens++;
+        let picked = pickNow();
+        chosen = picked.chosen ?? null;
+        tooFresh = picked.tooFresh;
+
         if (!chosen) {
           // 面板可能停在别的 tab（表情 / 搜索）——切到收藏再扫一次。
           // 以前是技能里盲点 tab_favorites 的绝对坐标，面板高度一变就点到格子里
@@ -504,20 +517,53 @@ export class SkillRunner {
           const tab = rectOf(this.#deps.graph, "sticker_panel", "tab_favorites", screen.w, screen.h);
           await this.#deps.actuator.tapPoint(Math.round(tab.x + tab.w / 2), Math.round(tab.y + tab.h / 2), 60);
           await sleep(500);
-          const again = await scanNow();
-          if (again.length > 0) chosen = pick(again);
+          addAll(await scanNow());
+          screens++;
+          picked = pickNow();
+          chosen = picked.chosen ?? null;
+          tooFresh = picked.tooFresh;
         }
         if (!chosen) {
           for (let i = 0; i < 3; i++) await scroll("top");
           for (let s = 0; s < 3 && !chosen; s++) {
             if (s > 0) await scroll("down");
-            const list = await scanNow();
-            if (list.length > 0) chosen = pick(list);
+            addAll(await scanNow());
+            screens++;
+            picked = pickNow();
+            chosen = picked.chosen ?? null;
+            tooFresh = picked.tooFresh;
+          }
+        } else if (tooFresh) {
+          // 挑中的这张 20 分钟内刚发过：往下翻，把屏外的候选也收进池子再挑。
+          // 翻 2 屏够用了（面板一般就两三屏），翻不动时扫到的是同一屏，池子不会变。
+          for (let s = 0; s < 2; s++) {
+            await scroll("down");
+            addAll(await scanNow());
+            screens++;
+            picked = pickNow();
+            chosen = picked.chosen ?? null;
+            tooFresh = picked.tooFresh;
+            if (!tooFresh) break;
           }
         }
         if (!chosen) {
           throw new SkillRunError(`面板里没有库里的贴纸（库里 ${this.#deps.stickers.size} 张；收藏可能还没收进来）`);
         }
+
+        // 选谁、翻了几屏、池子多大 —— 排查「怎么老是同一张」第一眼看这条
+        this.#deps.eventLog?.append(
+          "note",
+          {
+            stage: "sticker-pick",
+            mood: mood ?? null,
+            id: chosen.entry.id,
+            slot: chosen.cell.index,
+            pool: pool.length,
+            screens,
+            repeated: tooFresh,
+          },
+          { src: "skills.runner" },
+        );
 
         const cx = chosen.cell.rect.x + chosen.cell.rect.w / 2;
         const cy = chosen.cell.rect.y + chosen.cell.rect.h / 2;
