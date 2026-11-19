@@ -605,6 +605,30 @@ export class SkillRunner {
         this.#deps.stickers.markSent(chosen.entry);
         chosen.entry.collectedAt = chosen.entry.collectedAt ?? Date.now();
         this.#deps.stickers.save();
+
+        // 发完必须确认面板真的关了。真机踩过（2026-11-19 15:00）：点完贴纸面板没收，
+        // 而 detectPage 把它判成「列表页」，`act.close_panel` 看到 list 就直接返回不按返回 ——
+        // 面板就这么一直开着，之后每次 enterChat 都「搜索框里也没点进会话」，引擎卡了十几分钟。
+        // 这里不信页面判定，只看两条硬信号：输入栏有没有回到屏幕底部、格子里还有没有东西。
+        await sleep(500);
+        try {
+          const shot = decode((await this.#deps.device.adb.screencap()).png);
+          const stillOpen = !looksLikeInputBar(shot) && findStickerCells(shot, scan).length > 0;
+          let backs = 0;
+          if (stillOpen) {
+            backs = 1;
+            await this.#deps.device.adb.shell("input keyevent KEYCODE_BACK", 15000);
+            await sleep(400);
+          }
+          this.#deps.eventLog?.append(
+            "note",
+            { stage: "sticker-close", closed: !stillOpen, backs },
+            { src: "skills.runner" },
+          );
+        } catch {
+          // 截图失败就算了，别把「已经发出去了」这一事实搞成失败
+        }
+
         return {
           mood: chosen.entry.mood,
           slot: chosen.cell.index,
