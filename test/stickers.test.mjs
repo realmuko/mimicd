@@ -161,3 +161,45 @@ test("认图：dHash 都在范围内时还是取直方图最像的", () => {
   const hit = lib.findByFeatures([1, ...Array(63).fill(0)], "0000000000000000");
   assert.equal(hit?.mood, "嘲讽");
 });
+
+// 2026-11-19 用户：不关心库脏不脏，关心「发出来会不会重复」。
+// 库里同一张图可能有好几条记录（每次看到一个帧就建一条），各自有自己的发送时间；
+// 只按 id 判「最近发过」的话，来回换 id 就等于没换图 —— 发出来还是同一张。
+test("挑图：跟刚发过那张是同一张图的其它记录，要跳过", () => {
+  const lib = new StickerLibrary();
+  const now = Date.parse("2026-11-19T16:00:00+08:00");
+  // A：刚发过
+  lib.upsert({ dhash: "0000000000000000", hist: [0.99, 0.141, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.8, source: "received" });
+  const a = lib.list()[0];
+  a.sends.push(now - 60 * 1000);
+  // B：跟 A 就是同一张图（dHash 差 1 位），从没发过 —— 以前会挑它，因为「它最久没发过」
+  lib.upsert({ dhash: "0000000000000001", hist: [0.991, 0.134, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.9, source: "received" });
+  // C：另一张图，也没发过
+  lib.upsert({ dhash: "ffffffffffffffff", hist: [0.2, 0.8, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.5, source: "received" });
+
+  const hit = lib.pick("无语", { now, recentWindow: 20 * 60 * 1000 });
+  assert.equal(hit?.id, lib.list().find((e) => e.dhash === "ffffffffffffffff")?.id);
+});
+
+test("挑图：这个情绪只剩同一张图的几个记录时，还是得发一张（不能返回空）", () => {
+  const lib = new StickerLibrary();
+  const now = Date.parse("2026-11-19T16:00:00+08:00");
+  lib.upsert({ dhash: "0000000000000000", hist: [0.99, 0.141, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.8, source: "received" });
+  lib.list()[0].sends.push(now - 60 * 1000);
+  lib.upsert({ dhash: "0000000000000001", hist: [0.991, 0.134, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.9, source: "received" });
+
+  const hit = lib.pick("无语", { now, recentWindow: 20 * 60 * 1000 });
+  assert.ok(hit);
+});
+
+test("recentlySent / isSamePicture：按图判，不按 id 判", () => {
+  const lib = new StickerLibrary();
+  const now = Date.parse("2026-11-19T16:00:00+08:00");
+  lib.upsert({ dhash: "0000000000000000", hist: [0.99, 0.141, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.5, source: "received" });
+  lib.upsert({ dhash: "0000000000000001", hist: [0.991, 0.134, ...Array(62).fill(0)], mood: "无语", tags: [], funny: 0.5, source: "received" });
+  const [a, b] = lib.list();
+  assert.equal(lib.isSamePicture(a, b), true);
+  assert.equal(lib.recentlySent(20 * 60 * 1000, now).length, 0);
+  a.sends.push(now - 1000);
+  assert.equal(lib.recentlySent(20 * 60 * 1000, now).length, 1);
+});

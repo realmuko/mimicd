@@ -571,11 +571,14 @@ export class SkillRunner {
         // 目标在库里、但滑完 MAX_SCREENS 屏都没找出来：退回当前屏里最久没发过的那张。
         // 只从最后一屏里挑 —— 前面几屏的格子坐标早就滑走了，点下去会点到别的东西。
         if (!chosen) {
-          const usable = lastScreen.filter((c): c is Cand & { entry: Entry } => Boolean(c.entry));
-          const picked = pickSticker(usable.length > 0 ? usable : [], mood, {
-            now: Date.now(),
-            avoidRecentMs: AVOID_MS,
-          });
+          const visible = lastScreen.filter((c): c is Cand & { entry: Entry } => Boolean(c.entry));
+          // 同样按「图」排重：库里可能有好几条其实同一张，各自发送时间不同，
+          // 只按 id 判「刚发过」会挑到它的翻版，发出来还是同一张。
+          const lib = this.#deps.stickers;
+          const recent = lib.recentlySent(AVOID_MS);
+          const distinct = visible.filter((c) => !recent.some((r) => lib.isSamePicture(r, c.entry)));
+          const usable = distinct.length > 0 ? distinct : visible;
+          const picked = pickSticker(usable, mood, { now: Date.now(), avoidRecentMs: AVOID_MS });
           chosen = (picked.chosen as (Cand & { entry: Entry }) | undefined) ?? null;
         }
         if (!chosen) {

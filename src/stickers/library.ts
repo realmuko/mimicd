@@ -132,8 +132,26 @@ export class StickerLibrary {
   }
 
   /**
+   * 两条记录是不是「同一张图」。
+   *
+   * 库里的记录是按每次看到的样子各建一条的（动图换个帧就多一条），所以同一个 id 不等于
+   * 同一张图、不同 id 也可能就是同一张。发之前判「这张刚发过没有」必须按图判，不能按 id 判
+   * —— 否则轮换是假的：换了个 id，发出来还是同一张（2026-11-19 用户指出的重点）。
+   */
+  isSamePicture(a: Pick<StickerEntry, "hist" | "dhash">, b: Pick<StickerEntry, "hist" | "dhash">): boolean {
+    return cosine(a.hist, b.hist) >= SAME_PICTURE_HIST && hamming(a.dhash, b.dhash) <= SAME_PICTURE_DH;
+  }
+
+  /** 最近真的发出去过的那些记录（判断「是不是同一张」用）。 */
+  recentlySent(windowMs = 20 * 60 * 1000, now = Date.now()): StickerEntry[] {
+    return this.list().filter((e) => e.sends.some((t) => now - t < windowMs));
+  }
+
+  /**
    * 挑一张发给指定情绪的表情。
-   * 规则：情绪匹配优先 → 好玩程度高的优先 → 最近 3 张发过的不选（除非只有它）。
+   *
+   * 规则：情绪匹配优先 → 最久没发过 → 好玩程度高；并且**跳过任何跟最近发过的图看着一样的
+   * 记录**（库里同一张可能有好几条，按 id 轮换等于没轮换）。
    */
   pick(mood: string, opts: { recentWindow?: number; now?: number } = {}): StickerEntry | null {
     const now = opts.now ?? Date.now();
@@ -153,7 +171,13 @@ export class StickerLibrary {
     // 最久没发过的优先，同样久再按有趣度 —— 只按 funny 排的话，同一张会一直被选中
     // （funny 都一样时排序稳定，每次都还是它；2026-11-19 用户：「怎么一直发同一个表情」）
     const lastSent = (e: StickerEntry) => (e.sends.length > 0 ? Math.max(...e.sends) : 0);
-    return candidates.sort((a, b) => lastSent(a) - lastSent(b) || b.funny - a.funny)[0] ?? null;
+    const ranked = [...candidates].sort((a, b) => lastSent(a) - lastSent(b) || b.funny - a.funny);
+
+    // 关键一步：按「图」而不是按 id 排重。库里同一张动图可能有好几条记录，各自有自己的发送时间，
+    // 只按 id 判「最近发过」的话，来回换 id 就等于没换图 —— 发出来还是同一张。
+    const sentRecently = all.filter(isRecent);
+    const distinct = ranked.find((c) => !sentRecently.some((r) => r.id !== c.id && this.isSamePicture(r, c)));
+    return distinct ?? ranked[0] ?? null;
   }
 
   markSent(entry: StickerEntry, at = Date.now()): void {
@@ -170,6 +194,10 @@ export class StickerLibrary {
     return out;
   }
 }
+
+/** 「发出来是同一张图」的判据：库内两条记录之间比，不是面板那边比（那边 dHash 会漂 25~40 位）。 */
+export const SAME_PICTURE_HIST = 0.96;
+export const SAME_PICTURE_DH = 16;
 
 /** id = dhash + 直方图前 8 个桶的粗指纹，避免不同图撞 dHash。 */
 export function fingerprint(dhash: string, hist: number[]): string {
