@@ -455,15 +455,15 @@ export class SkillRunner {
         const midX = gridArea.x + gridArea.w / 2;
         const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-        // 面板上认图两档：先按库里那套严格判据认；认不出但直方图很像、dHash 也对得上
-        // 一档（0.9 / 24 位）就算。真机上收藏面板里同一张的 dHash 常到 15~22 位，严格档
-        // 一张都认不出来（2026-11-19 探针实测：53 格只有 17 格能认）。
+        // 面板上认图：不能照搬聊天气泡那套判据。实测（2026-11-19，收藏面板 7 帧 53 格）：
+        //   直方图 ≥0.93 的 35 格，但同一张在面板里的 dHash 能漂到 25~40 位 ——
+        //   “0.96 / 14 位”严格档一格都认不出来，“0.88 / 30 位”也只认 17 格。
+        // 而不同贴纸的直方图只有 0.60~0.76，所以面板这条路以直方图为主，dHash 放宽到 40 位兜底。
         const matchEntry = (piece: Bitmap) => {
           const feat = stickerFeatures(piece);
           return (
             this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash) ??
-            this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash, 0.9, 24) ??
-            this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash, 0.88, 30)
+            this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash, 0.93, 40)
           );
         };
         type StickerCell = ReturnType<typeof findStickerCells>[number];
@@ -472,7 +472,9 @@ export class SkillRunner {
         /** 一格贴纸是不是就是库里那一张：只跟指定目标比，认错的风险由目标 id 兜住。 */
         const isThatSticker = (piece: Bitmap, target: Entry): boolean => {
           const feat = stickerFeatures(piece);
-          return cosine(feat.hist, target.hist) >= 0.9 && hamming(feat.dhash, target.dhash) <= 24;
+          const h = cosine(feat.hist, target.hist);
+          if (h >= 0.96) return true;
+          return h >= 0.93 && hamming(feat.dhash, target.dhash) <= 44;
         };
         const scanNow = async (): Promise<{ cells: Cand[]; bmp: Bitmap }> => {
           const bmp = decode((await this.#deps.device.adb.screencap()).png);
