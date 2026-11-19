@@ -174,10 +174,10 @@ export function looksLikeTabBar(bmp: Bitmap): boolean {
 }
 
 /** 输入栏中部是接近纯白的圆角框。 */
-export function looksLikeInputBar(bmp: Bitmap): boolean {
+export function looksLikeInputBar(bmp: Bitmap, yRatio = 0.952): boolean {
   const rect: Rect = {
     x: Math.round(bmp.width * 0.14),
-    y: Math.round(bmp.height * 0.952),
+    y: Math.round(bmp.height * yRatio),
     w: Math.round(bmp.width * 0.55),
     // 只取输入框**最上面那一条**（实测 254–255）。
     // 往下半截是 247，而列表页 tab 栏那片白底实测 245 —— 阈值降到 244 确实能把
@@ -186,6 +186,27 @@ export function looksLikeInputBar(bmp: Bitmap): boolean {
     h: Math.round(bmp.height * 0.013),
   };
   return nearWhiteRatio(bmp, rect) > 0.5;
+}
+
+/**
+ * 表情面板打开时，会话输入栏被面板顶到屏幕中部（实测 y≈0.600），底部换成表情网格。
+ * 这时底部没有输入栏，而网格里浅底的贴纸又会让「四簇 tab 栏」判据成立 ——
+ * 页面就被判成 list：引擎以为在列表页，报「列表里没有未读」，实际卡在会话页动弹不得。
+ * 2026-11-19 15:33~15:44 就是这么空转的（面板一直开着，40 分钟没回一条）。
+ */
+export function looksLikeStickerPanel(bmp: Bitmap): boolean {
+  // 输入栏在底部 = 没开面板，直接排除
+  if (looksLikeInputBar(bmp)) return false;
+  // 会话页标题栏左侧有返回箭头（‹）；列表页顶部那一片是空的（「微信(N)」居中）。
+  // 实测：面板开着 0.050，列表页 0.000 —— 这是这两个页面唯一稳定分得开的差别。
+  const chevron: Rect = {
+    x: Math.round(bmp.width * 0.02),
+    y: Math.round(bmp.height * 0.045),
+    w: Math.round(bmp.width * 0.06),
+    h: Math.round(bmp.height * 0.03),
+  };
+  // 标题栏在、输入栏又不在底部 —— 只可能是被表情面板（或键盘+面板）顶上去了
+  return inkRatio(bmp, chevron, 120) > 0.02;
 }
 
 /** 综合判定：活动名优先，LauncherUI 用像素分 chat / list。 */
@@ -201,6 +222,11 @@ export function detectPage(bmp: Bitmap, focus: Focus): PageGuess {
     // 在群里空转几个小时。2026-11-18 14:13 就是这么卡住的：一句没发出去的草稿留在输入框里。
     if (looksLikeInputBar(bmp)) {
       return { page: "chat", confidence: 0.85, reason: "LauncherUI + 底部白盒输入栏" };
+    }
+    // 输入栏被顶到屏幕中部 = 表情面板开着。必须在 tab 栏之前判：
+    // 面板底部是贴纸网格，浅底贴纸会让「四簇 tab 栏」成立，整个页面被误判成 list。
+    if (looksLikeStickerPanel(bmp)) {
+      return { page: "sticker_panel", confidence: 0.8, reason: "LauncherUI + 输入栏被顶到中部（表情面板）" };
     }
     if (looksLikeTabBar(bmp)) {
       return { page: "list", confidence: 0.85, reason: "LauncherUI + 底部四簇 tab 栏" };

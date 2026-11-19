@@ -124,3 +124,30 @@ test("表情墙（表情铺到底、底部不亮）不能被判成列表页", ()
   const g = detectPage(bmp, focus);
   assert.notEqual(g.page, "list", `表情墙被判成列表页（${g.reason}）`);
 });
+// 2026-11-19 15:33~15:44 真机事故：表情面板一直开着，页面被判成 list（浅底贴纸让
+// 「四簇 tab 栏」成立），引擎以为在列表页、报「列表里没有未读」，40 分钟没回一条。
+function drawChatTitleChevron(bmp) {
+  // 会话页标题栏左侧的返回箭头（‹），采样区 x 0.02–0.08 / y 0.045–0.075
+  fill(bmp, W * 0.02, H * 0.045, W * 0.06, H * 0.03, 60);
+}
+
+test("表情面板开着：输入栏被顶上去 + 标题栏返回箭头在 → 判 sticker_panel，不判 list", () => {
+  const bmp = frame();
+  drawChatTitleChevron(bmp);
+  drawTabClusters(bmp); // 面板底部那排浅底贴纸，看起来就像 tab 栏
+  const guess = detectPage(bmp, focus);
+  assert.equal(guess.page, "sticker_panel");
+});
+
+test("列表页：顶部没有返回箭头，底部有四簇 tab → list", () => {
+  const bmp = frame();
+  drawTabClusters(bmp);
+  assert.equal(detectPage(bmp, focus).page, "list");
+});
+
+test("正常会话页：底部有输入栏 → chat（即使标题栏箭头在）", () => {
+  const bmp = frame();
+  drawChatTitleChevron(bmp);
+  drawInputBar(bmp);
+  assert.equal(detectPage(bmp, focus).page, "chat");
+});
