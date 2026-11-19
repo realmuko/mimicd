@@ -129,7 +129,10 @@ export class StickerLibrary {
 
     const fresh = pool.filter((e) => !isRecent(e));
     const candidates = fresh.length > 0 ? fresh : pool;
-    return candidates.sort((a, b) => b.funny - a.funny)[0] ?? null;
+    // 最久没发过的优先，同样久再按有趣度 —— 只按 funny 排的话，同一张会一直被选中
+    // （funny 都一样时排序稳定，每次都还是它；2026-11-19 用户：「怎么一直发同一个表情」）
+    const lastSent = (e: StickerEntry) => (e.sends.length > 0 ? Math.max(...e.sends) : 0);
+    return candidates.sort((a, b) => lastSent(a) - lastSent(b) || b.funny - a.funny)[0] ?? null;
   }
 
   markSent(entry: StickerEntry, at = Date.now()): void {

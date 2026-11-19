@@ -17,7 +17,7 @@ import { waitStable } from "../perception/stable.ts";
 import { findDarkPanel, isMenuPanel } from "../perception/panel.ts";
 import { findStickerCells, type PanelGrid } from "../perception/cells.ts";
 import { findImageBubbles } from "../perception/bubbles.ts";
-import { stickerFeatures } from "../image/image.ts";
+import { cosine, hamming, stickerFeatures } from "../image/image.ts";
 import { pickSticker } from "../stickers/pick.ts";
 import { findCardTitle, findLinkCards } from "../perception/cards.ts";
 import { bubbleSide } from "../monitor/read.ts";
@@ -455,18 +455,26 @@ export class SkillRunner {
         const midX = gridArea.x + gridArea.w / 2;
         const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-        // 面板可能被记住滚动位置：先看当前屏；当前屏没候选再回顶部往下找（最多 3 屏）。
-        // 两趟全量扫描太慢（真机 80s），常见情况第一屏就有。
+        // 面板上认图两档：先按库里那套严格判据认；认不出但直方图很像、dHash 也对得上
+        // 一档（0.9 / 24 位）就算。真机上收藏面板里同一张的 dHash 常到 15~22 位，严格档
+        // 一张都认不出来（2026-11-19 探针实测：53 格只有 17 格能认）。
         const matchEntry = (piece: Bitmap) => {
           const feat = stickerFeatures(piece);
           return (
             this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash) ??
+            this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash, 0.9, 24) ??
             this.#deps.stickers!.findByFeatures(feat.hist, feat.dhash, 0.88, 30)
           );
         };
         type StickerCell = ReturnType<typeof findStickerCells>[number];
-        type Cand = { cell: StickerCell; entry: import("../stickers/library.ts").StickerEntry };
-        const scanNow = async (): Promise<Cand[]> => {
+        type Entry = import("../stickers/library.ts").StickerEntry;
+        type Cand = { cell: StickerCell; entry?: Entry };
+        /** 一格贴纸是不是就是库里那一张：只跟指定目标比，认错的风险由目标 id 兜住。 */
+        const isThatSticker = (piece: Bitmap, target: Entry): boolean => {
+          const feat = stickerFeatures(piece);
+          return cosine(feat.hist, target.hist) >= 0.9 && hamming(feat.dhash, target.dhash) <= 24;
+        };
+        const scanNow = async (): Promise<{ cells: Cand[]; bmp: Bitmap }> => {
           const bmp = decode((await this.#deps.device.adb.screencap()).png);
           // 面板没打开时输入栏还在底部（面板打开会把它顶上去）——这时滑屏只会滑聊天记录
           if (looksLikeInputBar(bmp)) throw new SkillRunError("表情面板没打开（键盘还开着/按钮没点中）");
@@ -478,89 +486,113 @@ export class SkillRunner {
             used.add(entry.id);
             out.push({ cell, entry });
           }
-          return out;
+          return { cells: out, bmp };
         };
-        const scroll = async (dir: "top" | "down"): Promise<void> => {
-          const y0 = Math.round(gridArea.y + gridArea.h * (dir === "down" ? 0.7 : 0.35));
-          const stepPx = Math.round(scan.pitchY * screen.h);
+        const stepPx = Math.round(scan.pitchY * screen.h);
+        const swipePanel = async (dir: "top" | "down"): Promise<void> => {
+          const y0 = Math.round(gridArea.y + gridArea.h * (dir === "down" ? 0.72 : 0.3));
           const y1 = dir === "down" ? y0 - stepPx : y0 + stepPx;
-          await this.#deps.actuator.swipe({ x: midX, y: y0 }, { x: midX, y: y1 }, 220);
-          await sleep(350);
+          await this.#deps.actuator.swipe({ x: midX, y: y0 }, { x: midX, y: y1 }, 260);
+          await sleep(400);
         };
 
-        // 候选池：先只有当前屏，需要时往下翻着往里加（按 entry.id 去重）。
-        // 一屏只有 7~8 格，不翻页的话「无语」经常整屏只有一张可用 —— 2026-11-19
-        // 用户的原话：「怎么一直发同一个表情，是不是点错了」。不是点错，是池子太小。
-        const SIMILAR_AVOID_MS = 20 * 60 * 1000;
+        // 以前挑图只看当前屏：面板一屏才 7~8 格（grid.scan.maxRows = 2），而收藏里存了
+        // 一两百张，翻页又只在「一个候选都没有」时才走 —— 于是永远在发第一屏那几张。
+        // 2026-11-19 用户的原话：「你已经存了很多了，只是你不会往下滑表情窗口」。
+        //
+        // 现在反过来：**先按情绪从整个库里挑目标**（最久没发过的那张），再一屏一屏往下滑
+        // 把它找出来；找不到才退回「当前屏里最久没发过的那张」。
+        const AVOID_MS = 20 * 60 * 1000;
+        const MAX_SCREENS = 6;
         const pool: Cand[] = [];
         let screens = 0;
         const addAll = (list: Cand[]): void => {
           for (const c of list) {
-            if (!pool.some((p) => p.entry.id === c.entry.id)) pool.push(c);
+            if (!c.entry) continue;
+            if (!pool.some((p) => p.entry?.id === c.entry?.id)) pool.push(c);
           }
         };
-        const pickNow = () =>
-          pickSticker(pool, mood, { now: Date.now(), avoidRecentMs: SIMILAR_AVOID_MS });
 
-        let chosen: Cand | null = null;
-        let tooFresh = false;
-        addAll(await scanNow());
-        screens++;
-        let picked = pickNow();
-        chosen = picked.chosen ?? null;
-        tooFresh = picked.tooFresh;
+        // 面板会记住上次滑到哪儿，先无脑滑回顶部（到顶了再滑就是不动，没副作用）
+        for (let i = 0; i < 4; i++) await swipePanel("top");
 
-        if (!chosen) {
-          // 面板可能停在别的 tab（表情 / 搜索）——切到收藏再扫一次。
-          // 以前是技能里盲点 tab_favorites 的绝对坐标，面板高度一变就点到格子里
-          // 直接把一张表情发出去（2026-11-18 真机）。
-          const tab = rectOf(this.#deps.graph, "sticker_panel", "tab_favorites", screen.w, screen.h);
-          await this.#deps.actuator.tapPoint(Math.round(tab.x + tab.w / 2), Math.round(tab.y + tab.h / 2), 60);
-          await sleep(500);
-          addAll(await scanNow());
+        const wanted = this.#deps.stickers.pick(mood, { recentWindow: AVOID_MS, now: Date.now() });
+        let chosen: (Cand & { entry: Entry }) | null = null;
+        let found = false;
+        let lastScreen: Cand[] = [];
+
+        /** 这一屏里有没有目标那张：先看认出来的格子，再把认不出的格子单独跟目标比。 */
+        const huntTarget = (
+          shot: { cells: Cand[]; bmp: Bitmap },
+          target: Entry,
+        ): (Cand & { entry: Entry }) | undefined => {
+          const known = shot.cells.find((c) => c.entry?.id === target.id);
+          if (known?.entry) return { cell: known.cell, entry: known.entry };
+          const knownAt = new Set(shot.cells.map((c) => c.cell.index));
+          for (const cell of findStickerCells(shot.bmp, scan)) {
+            if (knownAt.has(cell.index)) continue;
+            if (isThatSticker(crop(shot.bmp, cell.rect), target)) return { cell, entry: target };
+          }
+          return undefined;
+        };
+
+        for (let s = 0; s < MAX_SCREENS; s++) {
+          if (s > 0) await swipePanel("down");
+          let shot = await scanNow();
           screens++;
-          picked = pickNow();
-          chosen = picked.chosen ?? null;
-          tooFresh = picked.tooFresh;
+          addAll(shot.cells);
+          lastScreen = shot.cells;
+          if (s === 0 && shot.cells.length === 0) {
+            // 面板可能停在别的 tab（表情 / 搜索）——切到收藏再扫这一屏。
+            // 以前是盲点 tab_favorites 的绝对坐标，面板高度一变就点到格子里
+            // 直接把一张表情发出去（2026-11-18 真机）。
+            const tab = rectOf(this.#deps.graph, "sticker_panel", "tab_favorites", screen.w, screen.h);
+            await this.#deps.actuator.tapPoint(Math.round(tab.x + tab.w / 2), Math.round(tab.y + tab.h / 2), 60);
+            await sleep(500);
+            shot = await scanNow();
+            screens++;
+            addAll(shot.cells);
+            lastScreen = shot.cells;
+          }
+          if (wanted) {
+            const hit = huntTarget(shot, wanted);
+            if (hit) {
+              chosen = hit;
+              found = true;
+              break;
+            }
+          }
+          // 没有指定目标（库里压根没这个情绪）：第一屏有得挑就收手
+          if (!wanted && pool.length > 0) break;
         }
+
+        // 目标在库里、但滑完 MAX_SCREENS 屏都没找出来：退回当前屏里最久没发过的那张。
+        // 只从最后一屏里挑 —— 前面几屏的格子坐标早就滑走了，点下去会点到别的东西。
         if (!chosen) {
-          for (let i = 0; i < 3; i++) await scroll("top");
-          for (let s = 0; s < 3 && !chosen; s++) {
-            if (s > 0) await scroll("down");
-            addAll(await scanNow());
-            screens++;
-            picked = pickNow();
-            chosen = picked.chosen ?? null;
-            tooFresh = picked.tooFresh;
-          }
-        } else if (tooFresh) {
-          // 挑中的这张 20 分钟内刚发过：往下翻，把屏外的候选也收进池子再挑。
-          // 翻 2 屏够用了（面板一般就两三屏），翻不动时扫到的是同一屏，池子不会变。
-          for (let s = 0; s < 2; s++) {
-            await scroll("down");
-            addAll(await scanNow());
-            screens++;
-            picked = pickNow();
-            chosen = picked.chosen ?? null;
-            tooFresh = picked.tooFresh;
-            if (!tooFresh) break;
-          }
+          const usable = lastScreen.filter((c): c is Cand & { entry: Entry } => Boolean(c.entry));
+          const picked = pickSticker(usable.length > 0 ? usable : [], mood, {
+            now: Date.now(),
+            avoidRecentMs: AVOID_MS,
+          });
+          chosen = (picked.chosen as (Cand & { entry: Entry }) | undefined) ?? null;
         }
         if (!chosen) {
           throw new SkillRunError(`面板里没有库里的贴纸（库里 ${this.#deps.stickers.size} 张；收藏可能还没收进来）`);
         }
 
-        // 选谁、翻了几屏、池子多大 —— 排查「怎么老是同一张」第一眼看这条
+        // 挑谁、滑了几屏、认出来几张 —— 排查「怎么老是同一张」第一眼看这条
         this.#deps.eventLog?.append(
           "note",
           {
             stage: "sticker-pick",
             mood: mood ?? null,
             id: chosen.entry.id,
+            wanted: wanted?.id ?? null,
+            found,
             slot: chosen.cell.index,
             pool: pool.length,
             screens,
-            repeated: tooFresh,
+            repeated: !found,
           },
           { src: "skills.runner" },
         );
