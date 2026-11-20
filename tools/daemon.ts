@@ -63,7 +63,7 @@ interface FileConfig {
   /** 主动搭话（dsh-speak-up 掷骰子决定，引擎这边只负责限额与发送） */
   proactive?: { maxPerHour?: number; maxPerDay?: number; minGapMs?: number; allowGroups?: boolean };
   /** 回复里「带表情」的节制：概率 + 同会话冷却 */
-  reply?: { stickerChance?: number; stickerCooldownMin?: number; stickerFallback?: boolean };
+  reply?: { stickerChance?: number; stickerCooldownMin?: number; stickerFallback?: boolean; skipCooldownMin?: number };
   autochat?: Partial<AutoChatConfig> & { collectEveryMin?: number };
   brain?:
     | { kind: "scripted"; template?: string }
@@ -692,6 +692,11 @@ const daemon = await startDaemonServer(
     // 交接路径（/pending/reply）发出去之后也要挂同一个冷却，否则引擎自己发和
     // 主模型发是两套节奏：交接那边不冷却，就会同一会话连着叫醒好几次。
     perChatCooldownMs: autoCfg.perChatCooldownMs,
+    // 判「这条不接」之后冷却多久再看下一批。默认 5 分钟（server 里的 DEFAULT_SKIP_COOLDOWN_MS），
+    // 真机上群里一热，5 分钟攒 20 条、再来还是判不接 —— 看着就是一小时没人（2026-11-20 用户连问三次）。
+    ...(typeof fileConfig.reply?.skipCooldownMin === "number"
+      ? { skipCooldownMs: Math.max(0, fileConfig.reply.skipCooldownMin) * 60_000 }
+      : {}),
   },
   { port },
 );
