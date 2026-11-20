@@ -4,9 +4,9 @@
 
 ```bash
 cd <repo>
-node tools/probe/probe.ts --adb "<dsh>/.tools/platform-tools/adb.exe"
+node tools/probe/probe.ts --adb "C:/path/to/adb.exe"
 # 指定设备 / 指定输出目录：
-node tools/probe/probe.ts --adb <adb> --serial A7Q0212... --out data/probe
+node tools/probe/probe.ts --adb <adb> --serial <serial> --out data/probe
 ```
 
 **纪律：只读。** 不点击、不输入、不滚动、不发消息；跑完手机停在原来的页面。

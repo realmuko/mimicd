@@ -63,7 +63,7 @@ export class SkillRunner {
   /**
    * 在收藏面板里怎么都找不到的目标 → 记录时间。
    * 不记的话每轮都拿它当目标、白扫 6 屏，最后只能退回「最后一屏剩下的那张」，
-   * 一晚上反复发同一张（2026-11-19 22 点某个群就是这个现象）。
+   * 一晚上反复发同一张（2026-11-19 22 点爬山群就是这个现象）。
    */
   readonly #panelMiss = new Map<string, number>();
 
@@ -529,7 +529,7 @@ export class SkillRunner {
         const lib = this.#deps.stickers;
         // 上一轮在面板里怎么都找不到的目标，这一轮直接换一个当目标。
         // 不这么做的话：每轮都瞄同一个「库里存在但面板里认不出」的贴纸 → 扫满 6 屏仍找不到
-        // → 只能退回最后一屏剩下的那张 → 一晚上反复发同一张（2026-11-19 某个群）。
+        // → 只能退回最后一屏剩下的那张 → 一晚上反复发同一张（2026-11-19 爬山群）。
         for (const [id, t] of this.#panelMiss) {
           if (Date.now() - t > MISS_TTL_MS) this.#panelMiss.delete(id);
         }

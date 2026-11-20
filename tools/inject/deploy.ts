@@ -1,7 +1,7 @@
 /**
  * 注入器部署脚本：推送 dex、停掉旧进程、启动、端口转发、自检。
  *
- *   node tools/inject/deploy.ts --adb "<dsh>/.tools/platform-tools/adb.exe"
+ *   node tools/inject/deploy.ts --adb "C:/path/to/adb.exe"
  *   node tools/inject/deploy.ts --adb <adb> --port 7801 --restart
  *
  * 为什么要有它：手工 adb 拼命令踩过三个坑（MSYS 路径被转换、pkill 把自己杀掉、

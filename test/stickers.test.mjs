@@ -204,7 +204,7 @@ test("recentlySent / isSamePicture：按图判，不按 id 判", () => {
   assert.equal(lib.recentlySent(20 * 60 * 1000, now).length, 1);
 });
 
-// 2026-11-19 22 点某个群：目标一直是一个「库里存在但面板里认不出」的贴纸，
+// 2026-11-19 22 点爬山群：目标一直是一个「库里存在但面板里认不出」的贴纸，
 // 每轮都拿它当目标、扫满 6 屏找不到，最后只能退回同一张。加上 exclude 之后要能换目标。
 test("挑图：exclude 掉面板里找不到的目标，换一张当目标", () => {
   const lib = new StickerLibrary();

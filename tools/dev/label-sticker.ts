@@ -1,7 +1,7 @@
 /**
  * 开发用：拿一张截图，找出里面的表情/图片气泡，交给视觉模型打标。
  *
- *   node tools/dev/label-sticker.ts --png "<dsh>/sticker-sent.png"
+ *   node tools/dev/label-sticker.ts --png "C:/path/to/sticker.png"
  *   node tools/dev/label-sticker.ts            # 不给就用当前手机截图
  */
 

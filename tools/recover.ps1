@@ -5,8 +5,10 @@
 # 只做三件事，不碰 adb server 的启动/停止（那属于运维，不该脚本乱动）。
 
 $ErrorActionPreference = "SilentlyContinue"
-$adb = "<dsh>/.tools/platform-tools/adb.exe"
-$root = "<repo>"
+$root = Split-Path $PSScriptRoot -Parent
+$adbFile = Join-Path $root "data\device.json"
+$dev = if (Test-Path $adbFile) { Get-Content $adbFile -Raw | ConvertFrom-Json } else { $null }
+$adb = if ($env:MIMICD_ADB) { $env:MIMICD_ADB } elseif ($dev -and $dev.adb) { [string]$dev.adb } else { "adb" }
 Set-Location $root
 
 Write-Host "等待手机（adb get-state = device）……"

@@ -191,7 +191,7 @@ test("会话对齐：精确 / 前缀 / 取最长命中，没有命中就是空",
   };
   assert.equal(resolveChatSession(map, "摸鱼闲聊群"), "session-aaa");
   // 手机上群名被截断（OCR 只到前面几个字）也要能对上
-  assert.equal(resolveChatSession(map, "周末爬山小分队有2个人领了红包"), "session-bbb");
+  assert.equal(resolveChatSession(map, "周末爬山小分队红包"), "session-bbb");
   // 两个都包含时取更长的那个
   assert.equal(resolveChatSession(map, "周末爬山小分队摸鱼群"), "session-ccc");
   assert.equal(resolveChatSession(map, "陌生群"), "");
@@ -207,7 +207,7 @@ test("wake 按会话对齐表选目标会话；没配专属会话就用默认", 
     schedule,
   });
 
-  await bridge.wake(pendingItem("a", { chat: "周末爬山小分队有2个人领了红包" }));
+  await bridge.wake(pendingItem("a", { chat: "周末爬山小分队红包" }));
   await bridge.wake(pendingItem("b", { chat: "摸鱼闲聊群" }));
 
   const targets = schedule.calls.map((args) => JSON.stringify(args[0]));

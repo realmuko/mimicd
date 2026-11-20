@@ -478,10 +478,10 @@ window.__ModuleLoader__.load({
         h("div", { style: { fontSize: 12, opacity: 0.8 } },
           "插件不替你重启引擎（避免把正在发消息的那一轮打断）。要重启，用你平时的方式："),
         h("pre", { style: S.pre }, [
-          "D:\\mimicd\\scripts\\run-daemon.cmd",
+          "<repo>\\scripts\\run-daemon.cmd",
           "",
           "或手动：",
-          'cd /d D:\\mimicd',
+          'cd /d <repo>',
           'node tools/daemon.ts --adb "<adb路径>" --serial <序列号> --launch-wechat',
         ].join("\n")),
         h("div", { style: S.note },

@@ -133,7 +133,7 @@ test("进会话：标题对上就成功（群标题的 (23) 不影响）", async
   assert.equal(calls.filter((c) => c[0] === "tap").length, 1);
 });
 
-test("进会话：第一次点进某个群，退回来重试，对上标题才算成功", async () => {
+test("进会话：第一次点进爬山群，退回来重试，对上标题才算成功", async () => {
   const { device, calls } = makeNav({ titles: ["周末爬山小分队(50)", "摸鱼闲聊群(23)"] });
   const result = await enterChat(device, "摸鱼闲聊群");
   assert.equal(result.ok, true, result.reason);
@@ -147,7 +147,7 @@ test("进会话：一直进错就失败，绝不返回 true（宁可不发）", 
   assert.equal(result.ok, false);
   assert.equal(result.attempts, 3);
   assert.match(result.reason, /进错会话/);
-  assert.match(result.reason, /群/);
+  assert.match(result.reason, /爬山/);
 });
 
 test("进会话：标题认不出来也算失败（不猜）", async () => {
@@ -168,7 +168,7 @@ test("进会话：列表里没有这个会话，直接说清楚", async () => {
 function makeSearchNav(opts = {}) {
   const calls = [];
   const state = { page: "list", titleReads: 0 };
-  // T1 之后「列表只赌一次」：第一次点行进错（群），第二次就应该走搜索拿到对的那个
+  // T1 之后「列表只赌一次」：第一次点行进错（爬山），第二次就应该走搜索拿到对的那个
   const titles = opts.titles ?? ["周末爬山小分队(50)", "摸鱼闲聊群(23)"];
   const typed = [];
   const device = {

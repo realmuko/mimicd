@@ -470,7 +470,7 @@ type ReplyKind = { text?: string; stickerMood?: string };
 const replyCfg = {
   stickerChance: fileConfig.reply?.stickerChance ?? 0.5,
   stickerCooldownMin: fileConfig.reply?.stickerCooldownMin ?? 10,
-  /** 模型没给情绪时，引擎按文字猜一个补上（2026-11-19：某个群 21 条全军覆没，全是裸文字） */
+  /** 模型没给情绪时，引擎按文字猜一个补上（2026-11-19：爬山群 21 条全军覆没，全是裸文字） */
   stickerFallback: fileConfig.reply?.stickerFallback ?? true,
 };
 const lastStickerAt = new Map<string, number>();
@@ -498,7 +498,7 @@ async function sendReplyInner(
   const text = (kind.text ?? "").trim();
 
   // 情绪：模型给了用模型的；没给就按文字兜底猜一个。
-  // 2026-11-19 实测：当天 10 条回复里 7 条 mood=null（某个群 10:40 之后全是裸文字），
+  // 2026-11-19 实测：当天 10 条回复里 7 条 mood=null（爬山群 10:40 之后全是裸文字），
   // 概率 0.8 / 冷却 5min 这两道闸一次都没触发 —— 根本没走到那一步。
   // 光在提示词里喊「默认带表情」不够：模型漏给就等于永远没有，兜底得落在引擎这边。
   const mood = kind.stickerMood ?? (replyCfg.stickerFallback && text ? inferMood(text) : undefined);

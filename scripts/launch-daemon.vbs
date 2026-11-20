@@ -1,5 +1,9 @@
-' 无窗口拉起微信引擎（mimicd daemon）。
-' 用 vbs 是为了不弹黑框；用 WMI 创建是为了让它脱离调用它的 shell，不被一起收掉。
+' Launch the WeChat engine (mimicd daemon) with no console window.
+' vbs is only here to avoid a flashing black box; Run(..., 0) also detaches it
+' from the shell that started it.
+' Keep this file pure ASCII: wscript/cscript read .vbs as ANSI.
+Set fso = CreateObject("Scripting.FileSystemObject")
+root = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 Set sh = CreateObject("WScript.Shell")
-sh.CurrentDirectory = "<repo>"
-sh.Run "cmd /c ""<repo>\scripts\run-daemon.cmd""", 0, False
+sh.CurrentDirectory = root
+sh.Run "cmd /c """ & root & "\scripts\run-daemon.cmd""", 0, False

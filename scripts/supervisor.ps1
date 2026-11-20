@@ -10,17 +10,26 @@
 #      when THIS supervisor stops running.
 
 $ErrorActionPreference = 'Continue'
-$Root   = '<repo>'
+$Root   = Split-Path $PSScriptRoot -Parent
 $Data   = Join-Path $Root 'data'
 $Log    = Join-Path $Data 'supervisor.log'
 $Hb     = Join-Path $Data 'supervisor.heartbeat'
+# Device/adb settings are machine-local: data\device.json (gitignored) or env vars.
+$Dev    = $null
+$DevFile = Join-Path $Data 'device.json'
+if (Test-Path $DevFile) { try { $Dev = Get-Content $DevFile -Raw | ConvertFrom-Json } catch {} }
 $Node   = (Get-Command node -EA 0).Source
-if (-not $Node) { $Node = '<node>\node.exe' }
-$Adb    = '<dsh>\.tools\platform-tools\adb.exe'
-$Serial = '<serial>'
+if (-not $Node) { $Node = 'node' }
+$Adb    = if ($env:MIMICD_ADB) { $env:MIMICD_ADB } elseif ($Dev -and $Dev.adb) { [string]$Dev.adb } else { 'adb' }
+$Serial = if ($env:MIMICD_SERIAL) { $env:MIMICD_SERIAL } elseif ($Dev -and $Dev.serial) { [string]$Dev.serial } else { '' }
 $Port   = 65480
 $DaemonLog = Join-Path $Data 'daemon.log'
 $ImeRestore = 'com.baidu.input_huawei/.ImeService'
+
+if (-not $Serial) {
+  Write-Output 'no serial: set MIMICD_SERIAL or create data\device.json { "serial": "...", "adb": "..." }'
+  exit 1
+}
 
 New-Item -ItemType Directory -Force -Path $Data | Out-Null
 
@@ -152,8 +161,8 @@ function Start-Daemon {
   }
   if ((PidOnPort) -gt 0) { Log 'engine: port still busy, skip start'; return }
   # 一条命令行 + 显式引号。Start-Process 的 -ArgumentList 数组只是「用空格拼起来」，
-  # 不会替带空格的路径加引号：adb 在 "<dsh>\..."，拼出来 daemon 拿到的是
-  # "D:\deepseek"，起来就 spawn ENOENT 退掉（2026-11-19 实测）。
+  # 不会替带空格的路径加引号：adb 路径里可能有空格，拼出来 daemon 拿到的是半截路径，
+  # 起来就 spawn ENOENT 退掉（2026-11-19 实测）。
   $argLine = '"{0}" --adb "{1}" --serial "{2}" --launch-wechat --ime-restore "{3}"' -f `
     (Join-Path $Root 'tools\daemon.ts'), $Adb, $Serial, $ImeRestore
   try {

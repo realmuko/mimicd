@@ -1,7 +1,7 @@
 # Register the mimicd supervisor as a Scheduled Task (run this once, elevated).
 # ASCII only.
 $ErrorActionPreference = 'Stop'
-$Root = '<repo>'
+$Root = Split-Path $PSScriptRoot -Parent
 $TaskName = 'mimicd-supervisor'
 $Ps1 = Join-Path $Root 'scripts\supervisor.ps1'
 

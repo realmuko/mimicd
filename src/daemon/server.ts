@@ -328,7 +328,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
           ...(textSent && text ? { text } : {}),
           // 用实际发出去的那个情绪（模型给的，或引擎兜底猜的）。
           // 以前这里只记模型给的那个，兜底发出去的表情在日志里看不出来 ——
-          // 排查「怎么老发同一张」时一脸茫然（2026-11-19 22 点某个群）。
+          // 排查「怎么老发同一张」时一脸茫然（2026-11-19 22 点爬山群）。
           ...(stickerSent && (result.mood ?? stickerMood) ? { stickerMood: result.mood ?? stickerMood } : {}),
           via: "handoff",
         },

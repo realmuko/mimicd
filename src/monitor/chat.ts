@@ -93,7 +93,7 @@ export function titleMatches(wanted: string, got: string): boolean {
   if (a.length < MIN_FUZZY_LEN || b.length < MIN_FUZZY_LEN) return false;
   if (b.includes(a) || a.includes(b)) return true;
   // 包含也失配时，按最长公共子串再给一次机会：手机上标题会被「〈 返回」挤掉开头一两个字
-  // （真机：群名「周末爬山小分队…」标题读成「102 个好兄弟…领了 50 人份」，
+  // （真机：群名「周末爬山小分队五十人…」标题被挤掉开头，只读到后半截，
   //  于是每轮都判「进错会话」，进不去就挂冷却 —— 这个群永远回不了）。
   // 条件仍然不宽：公共部分要覆盖 wanted 的 60% 以上，短名照样要求完全相等。
   const lcs = longestCommonLength(a, b);

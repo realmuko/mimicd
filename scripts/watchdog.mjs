@@ -3,7 +3,7 @@
  *
  * 为什么需要它（2026-11-18 的教训）：引擎是独立进程，没有服务托管 —— 电脑重启、
  * 进程崩了、或者活着但 tick 卡住，都没人拉起。bridge 那边还在每 8 秒轮询，
- * 日志里只留下一串 ECONNREFUSED，整条链路静默死亡，群里的人只会觉得突然哑了。
+ * 日志里只留下一串 ECONNREFUSED，整条链路静默死亡，群里的人只会觉得她突然哑了。
  *
  * 判定（任一命中算一次失败）：
  *   1. GET /health 连不上 / 超时（8s）
@@ -20,8 +20,9 @@
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = "D:\\mimicd";
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 65480;
 const HEALTH_URL = `http://127.0.0.1:${PORT}/health`;
 const DATA = path.join(ROOT, "data");
@@ -43,9 +44,18 @@ const RUN_CMD = path.join(ROOT, "scripts", "run-daemon.cmd");
 // 用当前进程的 node（看门狗本身就是 node 跑的）→ 两台机器都能跑
 const NODE = process.execPath;
 const DAEMON_LOG = path.join(DATA, "daemon.log");
-const ADB = "D:\\deepseek harness\\.tools\\platform-tools\\adb.exe";
-const SERIAL = "<serial>";
-const IME_RESTORE = "com.baidu.input_huawei/.ImeService";
+// 设备/adb 是本机设置：data/device.json（不入库）或环境变量
+const DEVICE = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(DATA, "device.json"), "utf8")); } catch { return {}; }
+})();
+const ADB = process.env.MIMICD_ADB || DEVICE.adb || "adb";
+const SERIAL = process.env.MIMICD_SERIAL || DEVICE.serial || "";
+const IME_RESTORE = process.env.MIMICD_IME || DEVICE.ime || "com.baidu.input_huawei/.ImeService";
+
+if (!SERIAL) {
+  console.error("[watchdog] no serial: set MIMICD_SERIAL or create data/device.json { \"serial\": \"...\" }");
+  process.exit(1);
+}
 const DAEMON_ARGS = [
   path.join(ROOT, "tools", "daemon.ts"),
   "--adb",

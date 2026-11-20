@@ -24,9 +24,9 @@ test("归一化与标题核对：包含关系即可，容忍成员数", () => {
 
 test("标题核对：归一化后短于 4 个字的名字必须完全相等（「阿鲤」不能匹配「钓鱼群」）", () => {
   assert.equal(titleMatches("阿鲤", "钓鱼群(23)"), false, "短名不能靠包含关系混过去");
-  assert.equal(titleMatches("阿鲤", "鱼"), true, "完全相等还是认的");
+  assert.equal(titleMatches("阿鲤", "阿鲤"), true, "完全相等还是认的");
   assert.equal(titleMatches("钓鱼群", "钓鱼群(23)"), true, "够长的名字仍可以包含");
-  assert.equal(titleMatches("群", "周末爬山小分队(50)"), false);
+  assert.equal(titleMatches("爬山", "周末爬山小分队(50)"), false);
   assert.equal(titleMatches("摸鱼闲聊群", "摸鱼闲聊群(23)"), true);
 });
 
@@ -46,11 +46,11 @@ test("标题栏取标题：把区域里所有行拼起来（私聊「对方正�
 
 test("标题栏取标题：名字被 OCR 拆成两行也能拼回去核对", () => {
   const lines = [
-    { text: "摸鱼翘嘴软饭", x: 300, y: 90, w: 300, h: 40 },
+    { text: "摸鱼闲聊", x: 300, y: 90, w: 300, h: 40 },
     { text: "群 (23)", x: 600, y: 92, w: 160, h: 36 },
   ];
   const title = titleFromOcr(lines);
-  assert.equal(title, "摸鱼翘嘴软饭 群 (23)");
+  assert.equal(title, "摸鱼闲聊 群 (23)");
   assert.equal(titleMatches("摸鱼闲聊群", title), true, "拼起来 + 归一化之后应该对上");
 });
 
@@ -62,12 +62,12 @@ test("@ 检测：@昵称 与「有人@我」都算", () => {
   assert.equal(mentionsMe("在吗", ["阿鲤"]), false);
   assert.equal(mentionsMe("@阿鲤", []), false, "没有昵称配置时不能瞎认");
 });
-test("标题核对：OCR 吃掉开头一两个字时，按最长公共子串也能认（真机「周末爬山小分队」）", () => {
-  // 列表里是「周末爬山小分队有2个人领了…」，进群后标题栏只读到「102 个好兄弟 … 领了 50 人份（1）」
+test("标题核对：OCR 吃掉开头一两个字时，按最长公共子串也能认（真机「周末爬山小分队五十人」）", () => {
+  // 列表里是「周末爬山小分队五十人…」，进群后标题栏被「〈 返回」挤掉开头，只读到后半截
   assert.equal(
-    titleMatches("周末爬山小分队", "102 个好兄弟 “ ．领了 50 人份（1）"),
+    titleMatches("周末爬山小分队五十人", "爬山小分队五十人 “ ．（1）"),
     true,
-    "公共部分「102个好兄弟」够长，要认成同一个群",
+    "公共部分「爬山小分队五十人」够长，要认成同一个群",
   );
   // 但不能宽到把别的群认进来：公共部分覆盖不足还是不认
   assert.equal(titleMatches("摸鱼闲聊群", "另一个完全不同的群(23)"), false);
