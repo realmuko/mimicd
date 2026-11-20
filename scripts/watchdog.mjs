@@ -40,7 +40,8 @@ const RUN_CMD = path.join(ROOT, "scripts", "run-daemon.cmd");
  *
  * 参数要和 run-daemon.cmd 保持一致（手动启动走那边，自动拉起走这边）。
  */
-const NODE = "D:\\nodejs\\node.exe";
+// 用当前进程的 node（看门狗本身就是 node 跑的）→ 两台机器都能跑
+const NODE = process.execPath;
 const DAEMON_LOG = path.join(DATA, "daemon.log");
 const ADB = "D:\\deepseek harness\\.tools\\platform-tools\\adb.exe";
 const SERIAL = "<serial>";

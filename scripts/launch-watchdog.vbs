@@ -6,4 +6,5 @@
 ' not at the engine itself.
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "<repo>"
-sh.Run "<node>\node.exe <repo>\scripts\watchdog.mjs", 0, False
+' node from PATH: desktop has <node>, laptop has <node>\node (both 24.x).
+sh.Run "node <repo>\scripts\watchdog.mjs", 0, False
