@@ -10,4 +10,6 @@ REM breaks page detection (2026-11-18).
 REM
 REM Log file: data\daemon.log. (Was daemon-current.out -- that name got stuck with a
 REM leaked file handle and made every restart fail with "file in use".)
-"<node>\node.exe" tools\daemon.ts --adb "<dsh>\.tools\platform-tools\adb.exe" --serial <serial> --launch-wechat --ime-restore com.baidu.input_huawei/.ImeService >> "<repo>\data\daemon.log" 2>&1
+REM Use node from PATH: desktop has <node>\node.exe, laptop has <node>\node\node.exe.
+REM Both are 24.x; hardcoding one path breaks the other machine.
+node tools\daemon.ts --adb "<dsh>\.tools\platform-tools\adb.exe" --serial <serial> --launch-wechat --ime-restore com.baidu.input_huawei/.ImeService >> "<repo>\data\daemon.log" 2>&1
