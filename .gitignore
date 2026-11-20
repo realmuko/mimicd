@@ -14,3 +14,7 @@ android/injector/*.dex
 android/probe/build/
 android/probe/mimic-probe.apk
 android/probe/debug.keystore
+
+# 每台机器各自维护的本机配置（含会话 id / 本机路径），不入库
+plugin/wechat-mimicd.config.json
+plugin/*.bak*
