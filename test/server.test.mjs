@@ -176,6 +176,56 @@ test("daemon：交接模式 —— /pending 列出、/pending/reply 发出并出
   }
 });
 
+test("daemon：文字发出去了、表情没发成 —— 待办要出队，不能退回重试（回归：同一句发两遍）", async () => {
+  const { PendingQueue } = await import("../src/daemon/pending.ts");
+  const queue = new PendingQueue();
+  const { deps } = makeDeps({
+    pending: queue,
+    sendReply: async () => ({
+      ok: false,
+      textSent: true,
+      stickerSent: false,
+      reason: "文字已发，表情没发出去：面板里没有库里的贴纸",
+    }),
+  });
+  const item = queue.add({ chat: "阿杰", kind: "dm", messages: [{ from: "other", text: "在吗" }] });
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const reply = await post(d.port, "/pending/reply", { id: item.id, text: "在的", stickerMood: "无语" });
+    // 文字确实发出去了：整次交接算成功，只是带个 warning
+    assert.equal(reply.status, 200);
+    assert.equal(reply.body.ok, true);
+    assert.equal(reply.body.stickerSent, false);
+    assert.match(String(reply.body.warning), /表情/);
+    // 关键：待办必须出队 —— 退回队列的话桥接会再叫醒一次，模型就会把同一句再发一遍
+    const after = await get(d.port, "/pending");
+    assert.equal(after.body.items.length, 0);
+    const again = await post(d.port, "/pending/reply", { id: item.id, text: "再回" });
+    assert.equal(again.status, 404);
+  } finally {
+    await d.close();
+  }
+});
+
+test("daemon：一个字都没发出去 —— 待办留在队列里，返回 422", async () => {
+  const { PendingQueue } = await import("../src/daemon/pending.ts");
+  const queue = new PendingQueue();
+  const { deps } = makeDeps({
+    pending: queue,
+    sendReply: async () => ({ ok: false, textSent: false, reason: "进不到会话「阿杰」" }),
+  });
+  const item = queue.add({ chat: "阿杰", kind: "dm", messages: [{ from: "other", text: "在吗" }] });
+  const d = await startDaemonServer(deps, { port: 0 });
+  try {
+    const reply = await post(d.port, "/pending/reply", { id: item.id, text: "在的" });
+    assert.equal(reply.status, 422);
+    const after = await get(d.port, "/pending");
+    assert.equal(after.body.items.length, 1);
+  } finally {
+    await d.close();
+  }
+});
+
 test("daemon：/say 主动搭话 —— 没配置时 400，被限额拒绝时 422 并落事件", async () => {
   const { deps } = makeDeps();
   const d = await startDaemonServer(deps, { port: 0 });
