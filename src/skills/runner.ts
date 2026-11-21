@@ -935,13 +935,35 @@ export class SkillRunner {
           const before = this.#shots.get(tag);
           if (!before) throw new SkillRunError(`没有找到标签为 ${tag} 的截图`);
           const threshold = Number(args["threshold"] ?? 0.01);
-          const shot = await this.#deps.device.adb.screencap();
-          const after = decode(shot.png);
+          // 只比一帧太脆：贴纸/小气泡点下去之后要 200~600ms 才渲染出来，
+          // 而且小贴纸在整块消息区里占比极小（真机实测过 0.0098 vs 阈值 0.01，
+          // 差一点点就判「没发出去」，然后整条技能失败 —— 2026-11-21 13:39）。
+          // 现在按 300ms 一帧最多等 timeoutMs，任意一帧过阈值就算发出去；
+          // 全都不过才报错，并把看到的最大比值带出来，方便判断是「真没发」还是「阈值偏紧」。
+          const timeoutMs = Math.max(0, Number(args["timeoutMs"] ?? 2400));
+          const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+          const startedAt = Date.now();
+          const deadline = startedAt + timeoutMs;
           const screen = this.#deps.graph.device.screen;
           const area = rectOf(this.#deps.graph, "chat", "message_area", screen.w, screen.h);
-          const diff = regionDiff(before, after, area, 12);
-          if (diff.ratio < threshold) throw new SkillRunError(`消息区没有变化（${diff.ratio}），可能没发出去`);
-          return { changed: diff.ratio, bbox: diff.bbox };
+          let best = 0;
+          let bestBox: { x: number; y: number; w: number; h: number } | undefined;
+          for (;;) {
+            const shot = await this.#deps.device.adb.screencap();
+            const after = decode(shot.png);
+            const diff = regionDiff(before, after, area, 12);
+            if (diff.ratio > best) {
+              best = diff.ratio;
+              bestBox = diff.bbox;
+            }
+            if (diff.ratio >= threshold) {
+              return { changed: diff.ratio, bbox: diff.bbox, waitedMs: Date.now() - startedAt };
+            }
+            if (Date.now() >= deadline) break;
+            await sleep(300);
+          }
+          const bestRounded = Math.round(best * 10000) / 10000;
+          throw new SkillRunError(`消息区没有变化（最高 ${bestRounded}，阈值 ${threshold}，等了 ${Date.now() - startedAt}ms），可能没发出去`);
         }
 
         if (kind === "clipboard_contains") {

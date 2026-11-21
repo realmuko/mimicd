@@ -63,7 +63,8 @@
       "args": {
         "kind": "message_changed",
         "tag": "before",
-        "threshold": 0.01
+        "threshold": 0.003,
+        "timeoutMs": 3000
       }
     },
     {

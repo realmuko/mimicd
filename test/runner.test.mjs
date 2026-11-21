@@ -258,6 +258,52 @@ test("runner：预算超了要停（不跑完全部步骤）", async () => {
   assert.equal(calls.filter((c) => c[0] === "tap").length, 1);
 });
 
+test("runner：message_changed 会等几帧 —— 刚发出去的贴纸还没渲染也算成功", async () => {
+  const before = chatScreen();
+  const after = chatScreen();
+  // 消息区里多一张小贴纸（真机上这个变化只占零点几个百分点）
+  fill(after, { x: 60, y: 1500, w: 180, h: 180 }, [255, 255, 255]);
+  const frames = [encode(before), encode(before), encode(after)];
+  const { device, calls } = makeDevice({ screen: before });
+  let i = 0;
+  device.adb.screencap = async () => {
+    calls.push(["screencap"]);
+    const png = frames[Math.min(i++, frames.length - 1)];
+    return { png, width: 1080, height: 2160, ms: 5 };
+  };
+  const actuator = new Actuator(device, { rng: createRng(5) });
+  const runner = new SkillRunner({ device, actuator, graph: GRAPH });
+  const skill = {
+    ...SKILL,
+    steps: [
+      { op: "obs.screenshot", args: { tag: "before" } },
+      { op: "check", args: { kind: "message_changed", tag: "before", threshold: 0.005, timeoutMs: 2000 } },
+    ],
+  };
+
+  const result = await runner.run(skill, { text: "x" });
+  assert.equal(result.ok, true, result.reason);
+  // 第 1 帧拍 before，第 2 帧还没变，第 3 帧才过 —— 说明确实重试了，不是一次定生死
+  assert.ok(calls.filter((c) => c[0] === "screencap").length >= 3);
+});
+
+test("runner：message_changed 一直没变化 → 报错并带上看到的最大比值", async () => {
+  const { device } = makeDevice({ screen: chatScreen() });
+  const actuator = new Actuator(device, { rng: createRng(5) });
+  const runner = new SkillRunner({ device, actuator, graph: GRAPH });
+  const skill = {
+    ...SKILL,
+    steps: [
+      { op: "obs.screenshot", args: { tag: "before" } },
+      { op: "check", args: { kind: "message_changed", tag: "before", threshold: 0.005, timeoutMs: 300 } },
+    ],
+  };
+
+  const result = await runner.run(skill, { text: "x" });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /消息区没有变化（最高/);
+});
+
 test("runner：obs.ocr 没配置 OCR 时明确报错", async () => {
   const { device } = makeDevice();
   const actuator = new Actuator(device, { rng: createRng(5) });
