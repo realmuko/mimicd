@@ -268,9 +268,21 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
         ...(stickerMood !== undefined ? { stickerMood } : {}),
       };
       const result = await deps.sendReply(item.chat, kind);
-      if (!result.ok) {
+      // 文字已经发出去了 → 这次交接就算成功，绝不能 release 待办。
+      // 回归（2026-11-20 / 11-21）：主模型给了「文字 + 表情」，文字发成功、表情那步失败，
+      // sendReply 返回 ok:false + textSent:true；旧代码在这里 release，待办退回队列 →
+      // 桥接认为没处理，再叫醒一次 → 同一条消息又发一遍，群里就看到两遍。
+      const textWentOut = result.textSent === true;
+      if (!result.ok && !textWentOut) {
         deps.pending.release(id);
         return send(422, { ok: false, error: result.reason ?? "发送失败" });
+      }
+      if (!result.ok && textWentOut) {
+        deps.eventLog.append(
+          "note",
+          { stage: "handoff-partial", chat: item.chat, error: result.reason ?? null, keptPending: true },
+          { src: "handoff" },
+        );
       }
       const textSent = result.textSent ?? Boolean(text);
       const stickerSent = result.stickerSent ?? (stickerMood !== undefined && !text);
@@ -337,7 +349,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: DaemonDep
       const sentLabel = [textSent && text ? text : "", stickerSent && stickerMood ? `[表情:${stickerMood}]` : ""]
         .filter(Boolean)
         .join(" + ");
-      return send(200, { ok: true, id, chat: item.chat, text: sentLabel || "（已发送）" });
+      return send(200, {
+        ok: true,
+        id,
+        chat: item.chat,
+        text: sentLabel || "（已发送）",
+        // 文字成功、表情没成：告诉调用方实情，但别让它当成失败去重发
+        ...(result.ok ? {} : { warning: result.reason ?? "表情没发出去", stickerSent: false }),
+      });
     }
 
     if (req.method === "POST" && url.pathname === "/pending/skip") {
